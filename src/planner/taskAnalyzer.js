@@ -95,11 +95,19 @@ export class TaskAnalyzer {
       planningRequired = false;
     }
 
+    // 2. Resolve needContext
+    // General queries that do not reference any workspace/filesystem context (no slashes, file extensions, edits, or commands)
+    const mentionsFiles = /\b[a-zA-Z0-9_-]+\.[a-zA-Z0-9]{1,4}\b/.test(query) || query.includes("/") || query.includes("\\");
+    const isGeneralKnowledge = (query.includes("what is") || query.includes("apa itu") || query.includes("explain") || query.includes("jelaskan") || query.includes("definition") || query.includes("how does")) && !mentionsFiles && !isEdit && !isFeature && !isBugFix && !isRefactor;
+    
+    const needContext = !isGeneralKnowledge;
+
     return {
       category,
       complexity,
       expectedSteps,
       planningRequired,
+      needContext,
     };
   }
 }

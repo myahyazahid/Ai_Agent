@@ -107,10 +107,44 @@ export class CodingAgent {
   async chat(userInput) {
     this.emitStatus("Understanding request");
 
+    const analysis = this.planner.analyzeTask(userInput, null);
+
+    if (!analysis.needContext) {
+      this.emitStatus("Deciding next action", {
+        phase: "llm",
+        iteration: 1,
+        maxIterations: 1,
+      });
+
+      const messages = [
+        { role: "system", content: "You are a helpful coding assistant. Answer the user's question directly." },
+        { role: "user", content: userInput }
+      ];
+
+      const response = await this.requestModel(messages, 1);
+      
+      this.emitDone({
+        role: "assistant",
+        done: true,
+        iterations: 1,
+        toolCount: 0,
+        success: true,
+      });
+
+      return {
+        type: "response",
+        role: "assistant",
+        content: response.content,
+        thinking: response.thinking,
+        done: true,
+        raw: response.raw,
+        iterations: 1,
+        toolResults: [],
+      };
+    }
+
     // Load project-level knowledge (cached after first scan).
     const workspaceData = await this.workspaceService.load();
-
-    const analysis = this.planner.analyzeTask(userInput, workspaceData);
 
     const history = this.memory.get();
     const context = this.workspaceContext.build({
@@ -129,7 +163,7 @@ export class CodingAgent {
     });
 
     if (analysis.planningRequired) {
-      const plan = this.planner.createPlan(userInput, analysis);
+      const plan = this.planner.createPlan(userInput, analysis, workspaceData);
       const toolResults = [];
       const newMemoryMessages = [{ role: "user", content: userInput }];
 

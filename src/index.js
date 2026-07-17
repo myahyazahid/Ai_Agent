@@ -5,6 +5,7 @@ import codingAgent from "./agents/codingAgent.js";
 import eventBus, { AGENT_EVENTS } from "./core/eventBus.js";
 import editCache from "./editing/editCache.js";
 import planCache from "./planner/planCache.js";
+import decisionCache from "./decision/decisionCache.js";
 import progressTracker from "./planner/progressTracker.js";
 import planner from "./planner/planner.js";
 import {
@@ -174,6 +175,41 @@ function chat() {
             display(`    Files: ${result.filesChanged.join(", ")}`);
           }
         });
+      }
+      chat();
+      return;
+    }
+
+    if (command === "decision" || command === "/decision") {
+      const dec = decisionCache.getDecision();
+      if (!dec) {
+        display("No strategy decisions have been made yet in this session.");
+      } else {
+        display("\n🧠 Last Strategy Decision:");
+        display(`Goal: "${dec.goal}"`);
+        display(`Project Type: ${dec.projectType}`);
+        display(`Strategy: ${dec.strategy}`);
+        display(`Confidence: ${Math.round(dec.confidence * 100)}%`);
+      }
+      chat();
+      return;
+    }
+
+    if (command === "why" || command === "/why") {
+      const dec = decisionCache.getDecision();
+      if (!dec) {
+        display("No strategy decisions have been made yet in this session.");
+      } else {
+        display("\n🤔 Rationale & Alternatives:");
+        display(`Reason: ${dec.reason}`);
+        if (dec.alternatives && dec.alternatives.length > 0) {
+          display("Alternatives Considered:");
+          dec.alternatives.forEach((alt, idx) => {
+            display(`  ${idx + 1}. ${alt}`);
+          });
+        } else {
+          display("Alternatives: None");
+        }
       }
       chat();
       return;

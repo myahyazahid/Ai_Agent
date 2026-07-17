@@ -74,9 +74,45 @@ export function renderStatusEvent(event) {
     case "context:cache-hit":
       return "💾 Using cached context";
 
+    // Decision Engine phases
+    case "decision:selecting":
+      return "🤔 Selecting strategy...";
+    case "decision:resolved": {
+      const decision = event?.decision || {};
+      const stratMap = {
+        create_auth_scratch: "Create authentication from scratch",
+        reuse_existing_auth: "Reuse existing authentication",
+        integrate_nextauth: "Integrate with NextAuth",
+        clarify: "Clarify request details",
+        none: "Direct file modification"
+      };
+      const stratName = stratMap[decision.strategy] || decision.strategy || "None";
+      const confPercent = Math.round((decision.confidence || 0) * 100);
+      return [
+        "📋 Decision:",
+        `  Strategy: ${stratName}`,
+        `  Reason: ${decision.reason || "No reason specified"}`,
+        `  Confidence: ${confPercent}%`
+      ].join("\n");
+    }
+
     // Planner phases
     case "planner:analyzing":
       return "🧠 Analyzing task...";
+    case "planner:inspecting":
+      return "🔍 Inspecting project...";
+    case "planner:detected": {
+      const summary = event?.summary || {};
+      const caps = summary.capabilities || {};
+      const confPercent = Math.round(summary.confidence * 100);
+      return [
+        "📋 Detected:",
+        `  Framework: ${summary.framework || "None"} (Confidence: ${confPercent}%)`,
+        `  Authentication: ${caps.authentication || "None"}`,
+        `  Database: ${caps.database || "None"}`,
+        `  Entry: ${summary.entryPoint || "None"}`
+      ].join("\n");
+    }
     case "planner:planning":
       return "📝 Building execution plan...";
     case "planner:step": {

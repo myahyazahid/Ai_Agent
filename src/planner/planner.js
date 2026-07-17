@@ -6,6 +6,8 @@ import planValidator from "./planValidator.js";
 import dependencyResolver from "./dependencyResolver.js";
 import progressTracker from "./progressTracker.js";
 import planCache from "./planCache.js";
+import projectInspector from "./projectInspector.js";
+import decisionEngine from "../decision/decisionEngine.js";
 import eventBus from "../core/eventBus.js";
 
 /**
@@ -21,6 +23,8 @@ export class Planner {
    * @param {import("./dependencyResolver.js").DependencyResolver} [options.resolver]
    * @param {import("./progressTracker.js").ProgressTracker} [options.tracker]
    * @param {import("./planCache.js").PlanCache} [options.cache]
+   * @param {import("./projectInspector.js").ProjectInspector} [options.inspector]
+   * @param {import("../decision/decisionEngine.js").DecisionEngine} [options.decisionEngine]
    * @param {import("../core/eventBus.js").AgentEventBus} [options.eventBus]
    */
   constructor({
@@ -30,6 +34,8 @@ export class Planner {
     resolver = dependencyResolver,
     tracker = progressTracker,
     cache = planCache,
+    inspector = projectInspector,
+    decisionEngine: decEngine = decisionEngine,
     eventBus: plannerEventBus = eventBus,
   } = {}) {
     this.analyzer = analyzer;
@@ -38,6 +44,8 @@ export class Planner {
     this.resolver = resolver;
     this.tracker = tracker;
     this.cache = cache;
+    this.inspector = inspector;
+    this.decisionEngine = decEngine;
     this.eventBus = plannerEventBus;
   }
 
@@ -58,22 +66,34 @@ export class Planner {
    *
    * @param {string} requestText
    * @param {import("./taskAnalyzer.js").TaskAnalysis} analysis
+   * @param {object | null} [workspaceData]
    * @returns {object} The sorted Plan object.
    */
-  createPlan(requestText, analysis) {
-    this.emitStatus("Building execution plan", { phase: "planner:planning" });
+  createPlan(requestText, analysis, workspaceData = null) {
+    this.emitStatus("Inspecting project capabilities", { phase: "planner:inspecting" });
 
-    // 1. Generate plan containing Goal and raw steps
-    const plan = this.generator.generate(requestText, analysis);
+    // 1. Inspect capabilities using Workspace summary
+    const summary = this.inspector.inspect(workspaceData);
 
-    // 2. Validate structural constraints
+    this.emitStatus("Project inspection complete", {
+      phase: "planner:detected",
+      summary,
+    });
+
+    // 2. Select strategy using DecisionEngine
+    const decision = this.decisionEngine.makeDecision(requestText, analysis, summary);
+
+    // 3. Generate plan containing Goal and raw steps using decision summary
+    const plan = this.generator.generate(requestText, analysis, decision);
+
+    // 4. Validate structural constraints
     this.validator.validate(plan);
 
-    // 3. Resolve linear order via topological dependency sorting
+    // 5. Resolve linear order via topological dependency sorting
     const sortedSteps = this.resolver.resolve(plan.steps);
     plan.steps = sortedSteps;
 
-    // 4. Initialize tracker and cache
+    // 6. Initialize tracker and cache
     this.tracker.init(plan);
     this.cache.savePlan(plan);
 
