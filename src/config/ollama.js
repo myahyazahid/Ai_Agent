@@ -1,4 +1,8 @@
-export const ollamaConfig = {
-  baseUrl: "http://127.0.0.1:11434",
-  model: "qwen3:latest",
+const config = {
+    host: "http://localhost:11434",
+    model: "qwen3:8b",
+    temperature: 0.7,
+    stream: false,
 };
+
+export default config;
