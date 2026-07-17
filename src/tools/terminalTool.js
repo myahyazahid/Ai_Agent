@@ -1,4 +1,4 @@
-import Tool from "./tool.js";
+import Tool from "./Tool.js";
 
 /**
  * Placeholder tool for future shell execution support.
@@ -50,10 +50,15 @@ export class TerminalTool extends Tool {
     });
 
     return {
+      type: "tool_result",
       tool: this.name,
-      status: "not_implemented",
+      success: false,
       message: "Terminal execution is intentionally disabled until a safe command policy is defined.",
-      args,
+      data: {
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+      },
     };
   }
 }

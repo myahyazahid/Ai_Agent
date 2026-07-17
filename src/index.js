@@ -5,6 +5,7 @@ import codingAgent from "./agents/codingAgent.js";
 import eventBus, { AGENT_EVENTS } from "./core/eventBus.js";
 import {
   renderChat,
+  renderDoneEvent,
   renderError,
   renderExit,
   renderHeader,
@@ -55,9 +56,16 @@ function subscribeToAgentEvents(executionEventBus) {
   };
 
   /**
+   * @param {{source?: string, success?: boolean}} event
    * @returns {void}
    */
-  const handleDone = () => {};
+  const handleDone = (event) => {
+    const output = renderDoneEvent(event);
+
+    if (output) {
+      display(output);
+    }
+  };
 
   executionEventBus.on(AGENT_EVENTS.STATUS, handleStatus);
   executionEventBus.on(AGENT_EVENTS.DONE, handleDone);
