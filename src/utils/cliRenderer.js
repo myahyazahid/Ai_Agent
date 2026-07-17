@@ -36,6 +36,44 @@ export function renderStatusEvent(event) {
       return `🤖 Continuing...${iterationTag}`;
     case "max_iterations":
       return "⚠️ Agent exceeded maximum execution steps.";
+
+    // Workspace awareness phases
+    case "workspace:scanning":
+      return "📂 Scanning workspace...";
+    case "workspace:analyzing":
+      return "🔍 Analyzing project...";
+    case "workspace:dependencies":
+      return "📦 Reading dependencies...";
+    case "workspace:entrypoint":
+      return "🎯 Detecting entry point...";
+    case "workspace:ready":
+      return `✅ Workspace ready (${event?.totalFiles ?? "?"} files, ${event?.framework ?? "none"})`;
+    case "workspace:cache-hit":
+      return "💾 Using cached workspace data";
+    case "workspace:cache-miss":
+      return "🔄 Cache expired, rescanning...";
+    case "workspace:cache-refresh":
+      return "🔄 Refreshing workspace data...";
+
+    // Context engine phases
+    case "context:building":
+      return "🧠 Context engine building...";
+    case "context:selecting-files":
+      return "🔍 Selecting relevant files...";
+    case "context:resolving":
+      return "🔍 Resolving file references...";
+    case "context:ranking":
+      return "📊 Scoring file relevance...";
+    case "context:budget":
+      return `⚖ Applying token budget (${event?.maxTokens ?? "?"} tokens)...`;
+    case "context:ready": {
+      const cacheTag = event?.cached ? " (cached)" : "";
+      const selected = typeof event?.selectedFilesCount === "number" ? ` (${event.selectedFilesCount} files)` : "";
+      return `✅ Context assembled${cacheTag}${selected}`;
+    }
+    case "context:cache-hit":
+      return "💾 Using cached context";
+
     default: {
       const message =
         typeof event?.message === "string" ? event.message.trim() : "";

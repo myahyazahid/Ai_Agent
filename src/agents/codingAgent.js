@@ -1,5 +1,4 @@
-// src/agents/codingAgent.js
-
+import { access } from "node:fs/promises";
 import promptBuilder from "../core/promptBuilder.js";
 import memory from "../core/memory.js";
 import llm from "../core/llm.js";
@@ -7,6 +6,8 @@ import eventBus from "../core/eventBus.js";
 import toolParser from "../core/toolParser.js";
 import toolRegistry from "../registry/toolRegistry.js";
 import workspaceContext from "../core/workspaceContext.js";
+import workspaceService from "../workspace/workspaceService.js";
+import contextEngine from "../context/contextEngine.js";
 
 const DEFAULT_MAX_ITERATIONS = 15;
 
@@ -19,6 +20,8 @@ export class CodingAgent {
    * @param {typeof toolParser} [dependencies.toolParser]
    * @param {typeof toolRegistry} [dependencies.toolRegistry]
    * @param {typeof workspaceContext} [dependencies.workspaceContext]
+   * @param {typeof workspaceService} [dependencies.workspaceService]
+   * @param {typeof contextEngine} [dependencies.contextEngine]
    * @param {import("../core/eventBus.js").AgentEventBus} [dependencies.eventBus]
    * @param {number} [dependencies.maxIterations]
    */
@@ -29,6 +32,8 @@ export class CodingAgent {
     toolParser: responseToolParser = toolParser,
     toolRegistry: registeredTools = toolRegistry,
     workspaceContext: workspaceContextBuilder = workspaceContext,
+    workspaceService: workspaceKnowledgeService = workspaceService,
+    contextEngine: contextEngineService = contextEngine,
     eventBus: executionEventBus = eventBus,
     maxIterations = DEFAULT_MAX_ITERATIONS,
   } = {}) {
@@ -38,6 +43,8 @@ export class CodingAgent {
     this.toolParser = responseToolParser;
     this.toolRegistry = registeredTools;
     this.workspaceContext = workspaceContextBuilder;
+    this.workspaceService = workspaceKnowledgeService;
+    this.contextEngine = contextEngineService;
     this.eventBus = executionEventBus;
     this.eventSource = "codingAgent";
     this.maxIterations = maxIterations;
@@ -92,12 +99,26 @@ export class CodingAgent {
     this.emitStatus("Understanding request");
     this.emitStatus("Planning", { phase: "planning" });
 
+    // Load project-level knowledge (cached after first scan).
+    const workspaceData = await this.workspaceService.load();
+
     const history = this.memory.get();
     const context = this.workspaceContext.build({
       userInput,
       history,
     });
-    const messages = this.promptBuilder.build(userInput, history, context);
+
+    const recentFiles = this.extractRecentFiles(history);
+
+    // Build context through contextEngine
+    const contextEngineResult = await this.contextEngine.build({
+      request: userInput,
+      workspace: workspaceData,
+      activeFile: context.currentTargetFile,
+      recentFiles,
+    });
+
+    const messages = this.promptBuilder.build(userInput, history, context, contextEngineResult.context);
     const newMemoryMessages = [{ role: "user", content: userInput }];
     const toolResults = [];
 
@@ -248,6 +269,30 @@ export class CodingAgent {
     }
 
     const tool = this.toolRegistry.get(parsed.tool);
+
+    if (parsed.tool === "write_file") {
+      const filePath = parsed.args?.path;
+      if (filePath && typeof filePath === "string") {
+        const isSafe = await this.verifyFileWriteSafety(filePath);
+        if (!isSafe) {
+          const result = this.createToolResult(
+            parsed.tool,
+            false,
+            `Safety violation: The file '${filePath}' already exists. You cannot overwrite or edit it without reading its contents first. Please call read_file on this file path first, analyze the implementation, and plan your changes before modifying it.`
+          );
+
+          this.emitStatus("Tool Failed", {
+            phase: "tool_failed",
+            tool: parsed.tool,
+            args: parsed.args,
+            iteration,
+            result,
+          });
+
+          return result;
+        }
+      }
+    }
 
     this.emitStatus("Executing Tool", {
       phase: "tool_executing",
@@ -409,17 +454,110 @@ export class CodingAgent {
     });
   }
 
-  /**
-   * Emit a completion event.
-   *
-   * @param {Record<string, unknown>} [payload]
-   * @returns {boolean}
-   */
   emitDone(payload = {}) {
     return this.eventBus.emitDone({
       source: this.eventSource,
       ...payload,
     });
+  }
+  /**
+   * Extract unique file paths referenced in recent conversation history.
+   *
+   * Matches both structured JSON patterns and raw text paths with file extensions.
+   *
+   * @param {Array<{role: string, content: string}>} history
+   * @returns {string[]}
+   */
+  extractRecentFiles(history) {
+    const recent = new Set();
+    const pathRegex = /(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+/g;
+
+    for (const msg of history) {
+      if (typeof msg.content !== "string") {
+        continue;
+      }
+
+      // Try parsing JSON first (if it's a tool call/result)
+      try {
+        const parsed = JSON.parse(msg.content);
+        const filePath = parsed.args?.path || parsed.data?.path || parsed.toolResult?.data?.path;
+        if (filePath && typeof filePath === "string") {
+          recent.add(filePath);
+          continue;
+        }
+      } catch {
+        // Not JSON
+      }
+
+      // Text fallback
+      const matches = msg.content.match(pathRegex);
+      if (matches) {
+        for (const match of matches) {
+          const clean = match.replace(/\\/g, "/").replace(/^\.\//, "");
+          // Filter out numbers disguised as files (e.g. 1.7.0)
+          if (clean.includes(".") && !/\d+\.\d+\.\d+/.test(clean)) {
+            recent.add(clean);
+          }
+        }
+      }
+    }
+
+    return Array.from(recent);
+  }
+
+  /**
+   * Programmatic safety check to prevent overwriting existing files without
+   * reading them first.
+   *
+   * @param {string} filePath
+   * @returns {Promise<boolean>} True if safe (file does not exist or has been read), false otherwise.
+   */
+  async verifyFileWriteSafety(filePath) {
+    if (typeof filePath !== "string" || !filePath.trim()) {
+      return true;
+    }
+
+    const fileTool = this.toolRegistry.get("write_file");
+    if (!fileTool) {
+      return true;
+    }
+
+    try {
+      const resolvedPath = fileTool.resolvePath(filePath);
+      const fileExists = await access(resolvedPath).then(() => true).catch(() => false);
+      if (!fileExists) {
+        return true; // File doesn't exist, writing is safe (creation of new file)
+      }
+
+      // File exists! Verify it was read first in this conversation session.
+      const history = this.memory.get();
+      const cleanPath = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
+
+      const wasRead = history.some((msg) => {
+        const contentLower = (msg.content || "").toLowerCase();
+        
+        // Check if there is an assistant tool call to read_file on this file path
+        if (msg.role === "assistant" && contentLower.includes("read_file")) {
+          try {
+            const parsed = JSON.parse(msg.content);
+            if (parsed.type === "tool_call" && parsed.tool === "read_file") {
+              const p = parsed.args?.path;
+              if (typeof p === "string") {
+                const normP = p.replace(/\\/g, "/").replace(/^\.\//, "");
+                return normP === cleanPath;
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+        return false;
+      });
+
+      return wasRead;
+    } catch {
+      return true; // Fallback to safe if resolution fails
+    }
   }
 }
 
