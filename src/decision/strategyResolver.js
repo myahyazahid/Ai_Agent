@@ -93,6 +93,49 @@ export class StrategyResolver {
       alternatives,
     };
   }
+
+  /**
+   * Resolve clarification choice reply into a final strategy decision.
+   *
+   * @param {import("./decisionCache.js").Decision} originalDecision
+   * @param {string} replyText
+   * @param {import("../planner/projectInspector.js").CapabilitySummary} capabilities
+   * @returns {import("./decisionCache.js").Decision}
+   */
+  resolveClarification(originalDecision, replyText, capabilities) {
+    const reply = replyText.toLowerCase();
+    
+    // Default strategy is option 1 (Express API scratch)
+    let strategy = "create_auth_scratch";
+    let reason = "User chose to convert project to Express API.";
+    let projectType = "REST API";
+    let confidence = 0.95;
+
+    // Option 2 check: CLI Authentication
+    if (reply.includes("cli") || reply.includes("2") || reply.includes("authentication")) {
+      strategy = "create_auth_scratch";
+      reason = "User chose to implement CLI authentication.";
+      projectType = "CLI";
+      confidence = 0.90;
+    } else {
+      // Convert capabilities on the fly so plan generator compiles Express/REST API steps
+      capabilities.framework = "Express";
+      if (!capabilities.capabilities) {
+        capabilities.capabilities = {};
+      }
+      capabilities.capabilities.routing = "express";
+      capabilities.confidence = 0.95;
+    }
+
+    return {
+      goal: originalDecision.goal || originalDecision.goal?.goal,
+      projectType,
+      strategy,
+      reason,
+      confidence,
+      alternatives: []
+    };
+  }
 }
 
 export default new StrategyResolver();

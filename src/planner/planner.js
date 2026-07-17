@@ -67,9 +67,10 @@ export class Planner {
    * @param {string} requestText
    * @param {import("./taskAnalyzer.js").TaskAnalysis} analysis
    * @param {object | null} [workspaceData]
+   * @param {object | null} [decision]
    * @returns {object} The sorted Plan object.
    */
-  createPlan(requestText, analysis, workspaceData = null) {
+  createPlan(requestText, analysis, workspaceData = null, decision = null) {
     this.emitStatus("Inspecting project capabilities", { phase: "planner:inspecting" });
 
     // 1. Inspect capabilities using Workspace summary
@@ -80,11 +81,11 @@ export class Planner {
       summary,
     });
 
-    // 2. Select strategy using DecisionEngine
-    const decision = this.decisionEngine.makeDecision(requestText, analysis, summary);
+    // 2. Select strategy using DecisionEngine unless a clarified decision was supplied.
+    const resolvedDecision = decision ?? this.decisionEngine.makeDecision(requestText, analysis, summary);
 
     // 3. Generate plan containing Goal and raw steps using decision summary
-    const plan = this.generator.generate(requestText, analysis, decision);
+    const plan = this.generator.generate(requestText, analysis, resolvedDecision);
 
     // 4. Validate structural constraints
     this.validator.validate(plan);

@@ -51,6 +51,32 @@ export class DecisionEngine {
   }
 
   /**
+   * Select the strategy based on clarification query answer.
+   *
+   * @param {import("./decisionCache.js").Decision} originalDecision
+   * @param {string} replyText
+   * @param {import("../planner/projectInspector.js").CapabilitySummary} capabilities
+   * @returns {import("./decisionCache.js").Decision}
+   */
+  resolveClarification(originalDecision, replyText, capabilities) {
+    this.emitStatus("Resolving clarification strategy", { phase: "decision:selecting" });
+
+    // 1. Resolve strategy decision
+    const decision = this.resolver.resolveClarification(originalDecision, replyText, capabilities);
+
+    // 2. Cache resolved decision
+    this.cache.saveDecision(decision);
+
+    // 3. Emit completed status
+    this.emitStatus("Decision selected after clarification", {
+      phase: "decision:resolved",
+      decision,
+    });
+
+    return decision;
+  }
+
+  /**
    * Emit status event helper.
    *
    * @param {string} message

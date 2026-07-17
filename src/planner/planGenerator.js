@@ -60,10 +60,84 @@ export class PlanGenerator {
     }
 
     const entry = "src/index.js";
-    const fallbackMode = decision?.strategy === "create_auth_scratch" && decision?.confidence < 0.6;
+    const projectStrategy = decision?.projectStrategy || decision?.strategy || "none";
+    const authenticationStrategy = decision?.authenticationStrategy || "none";
+    const fallbackMode = projectStrategy === "express" && decision?.confidence < 0.6;
 
     if (analysis.category === "feature" || requestText.toLowerCase().includes("auth") || requestText.toLowerCase().includes("login")) {
-      if (fallbackMode) {
+      if (projectStrategy === "express") {
+        steps.push({
+          id: "step_install_express",
+          type: "tool",
+          target: "npm install express",
+          description: "Install Express framework",
+          dependsOn: [],
+          failureStrategy: "retry",
+          status: "pending",
+        });
+
+        steps.push({
+          id: "step_create_express_app",
+          type: "edit",
+          target: entry,
+          description: "Create an Express application entrypoint",
+          dependsOn: ["step_install_express"],
+          failureStrategy: "abort",
+          status: "pending",
+        });
+
+        steps.push({
+          id: "step_create_login_route",
+          type: "edit",
+          target: entry,
+          description: "Create a login endpoint inside the Express app",
+          dependsOn: ["step_create_express_app"],
+          failureStrategy: "abort",
+          status: "pending",
+        });
+
+        if (authenticationStrategy === "jwt") {
+          steps.push({
+            id: "step_install_jwt",
+            type: "tool",
+            target: "npm install jsonwebtoken",
+            description: "Install JWT dependency",
+            dependsOn: ["step_create_login_route"],
+            failureStrategy: "retry",
+            status: "pending",
+          });
+
+          steps.push({
+            id: "step_create_auth_middleware",
+            type: "edit",
+            target: "src/middleware/auth.js",
+            description: "Create JWT authentication middleware",
+            dependsOn: ["step_install_jwt"],
+            failureStrategy: "abort",
+            status: "pending",
+          });
+
+          steps.push({
+            id: "step_generate_token",
+            type: "edit",
+            target: entry,
+            description: "Generate JWT tokens for the login flow",
+            dependsOn: ["step_create_auth_middleware"],
+            failureStrategy: "abort",
+            status: "pending",
+          });
+        }
+
+        steps.push({
+          id: "step_verify",
+          type: "tool",
+          target: `node --check ${entry}`,
+          description: `Verify server syntax on ${entry}`,
+          dependsOn: ["step_create_login_route"],
+          failureStrategy: "skip",
+          status: "pending",
+        });
+      } else if (fallbackMode) {
         steps.push({
           id: "step_read_entry",
           type: "read",
@@ -90,136 +164,6 @@ export class PlanGenerator {
           target: `node --check ${entry}`,
           description: `Verify server syntax on ${entry}`,
           dependsOn: ["step_create_endpoint"],
-          failureStrategy: "skip",
-          status: "pending",
-        });
-      } else if (decision?.strategy === "create_auth_scratch") {
-        steps.push({
-          id: "step_install",
-          type: "tool",
-          target: "jsonwebtoken",
-          description: "Install dependency jsonwebtoken",
-          dependsOn: [],
-          failureStrategy: "abort",
-          status: "pending",
-        });
-
-        steps.push({
-          id: "step_read_entry",
-          type: "read",
-          target: entry,
-          description: `Read entrypoint configuration at ${entry}`,
-          dependsOn: [],
-          failureStrategy: "retry",
-          status: "pending",
-        });
-
-        steps.push({
-          id: "step_create_middleware",
-          type: "edit",
-          target: "src/middleware/auth.js",
-          description: "Create new JWT token authentication middleware at src/middleware/auth.js",
-          dependsOn: ["step_install"],
-          failureStrategy: "abort",
-          status: "pending",
-        });
-
-        steps.push({
-          id: "step_register_routes",
-          type: "edit",
-          target: entry,
-          description: `Register authorization routes inside entrypoint file ${entry}`,
-          dependsOn: ["step_read_entry", "step_create_middleware"],
-          failureStrategy: "abort",
-          status: "pending",
-        });
-
-        steps.push({
-          id: "step_verify",
-          type: "tool",
-          target: `node --check ${entry}`,
-          description: `Verify server syntax on ${entry}`,
-          dependsOn: ["step_register_routes"],
-          failureStrategy: "skip",
-          status: "pending",
-        });
-      } else if (decision?.strategy === "reuse_existing_auth") {
-        steps.push({
-          id: "step_read_entry",
-          type: "read",
-          target: entry,
-          description: `Read entrypoint configuration at ${entry}`,
-          dependsOn: [],
-          failureStrategy: "retry",
-          status: "pending",
-        });
-
-        steps.push({
-          id: "step_reuse_auth",
-          type: "edit",
-          target: entry,
-          description: "Reuse existing authentication middleware configurations",
-          dependsOn: ["step_read_entry"],
-          failureStrategy: "abort",
-          status: "pending",
-        });
-
-        steps.push({
-          id: "step_register_routes",
-          type: "edit",
-          target: entry,
-          description: `Register authorization routes inside entrypoint file ${entry}`,
-          dependsOn: ["step_read_entry", "step_reuse_auth"],
-          failureStrategy: "abort",
-          status: "pending",
-        });
-
-        steps.push({
-          id: "step_verify",
-          type: "tool",
-          target: `node --check ${entry}`,
-          description: `Verify server syntax on ${entry}`,
-          dependsOn: ["step_register_routes"],
-          failureStrategy: "skip",
-          status: "pending",
-        });
-      } else if (decision?.strategy === "integrate_nextauth") {
-        steps.push({
-          id: "step_read_entry",
-          type: "read",
-          target: entry,
-          description: `Read entrypoint configuration at ${entry}`,
-          dependsOn: [],
-          failureStrategy: "retry",
-          status: "pending",
-        });
-
-        steps.push({
-          id: "step_create_nextauth",
-          type: "edit",
-          target: "pages/api/auth.js",
-          description: "Create NextAuth API configuration route pages/api/auth.js",
-          dependsOn: ["step_read_entry"],
-          failureStrategy: "abort",
-          status: "pending",
-        });
-
-        steps.push({
-          id: "step_register_routes",
-          type: "edit",
-          target: entry,
-          description: `Register NextAuth middleware options on entrypoint ${entry}`,
-          dependsOn: ["step_read_entry", "step_create_nextauth"],
-          failureStrategy: "abort",
-          status: "pending",
-        });
-
-        steps.push({
-          id: "step_verify",
-          type: "tool",
-          target: `node --check ${entry}`,
-          description: `Verify server syntax on ${entry}`,
-          dependsOn: ["step_register_routes"],
           failureStrategy: "skip",
           status: "pending",
         });

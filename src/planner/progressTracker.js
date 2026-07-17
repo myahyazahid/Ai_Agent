@@ -18,7 +18,7 @@ export class ProgressTracker {
     this.plan = null;
     /** @type {Record<string, StepResult>} */
     this.results = {};
-    /** @type {"Pending" | "Executing" | "WaitingForUser" | "Completed" | "Failed"} */
+    /** @type {"Pending" | "Executing" | "WaitingForUser" | "WaitingForManualAction" | "Completed" | "Failed"} */
     this.status = "Pending";
   }
 

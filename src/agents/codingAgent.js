@@ -122,18 +122,6 @@ export class CodingAgent {
           this.emitStatus("Resuming active plan", { phase: "planner:resuming" });
           this.planner.tracker.status = "Executing";
 
-          const { remainingSteps } = this.planner.tracker.getProgress();
-          const currentClarify = remainingSteps.find(s => s.type === "clarification");
-          if (currentClarify) {
-            this.planner.recordStepResult(currentClarify.id, {
-              status: "success",
-              duration: 0,
-              filesChanged: [],
-              toolUsed: "user_reply",
-              output: userInput,
-            });
-          }
-
           const toolResults = [];
           const newMemoryMessages = [
             { role: "user", content: `My choice is: ${userInput}` }
@@ -155,6 +143,21 @@ export class CodingAgent {
             activeFile: context.currentTargetFile,
             recentFiles,
           });
+
+          const originalRequest = activePlan.goal || userInput;
+          const originalAnalysis = this.planner.analyzeTask(originalRequest, workspaceData);
+          const summary = this.planner.inspector?.inspect?.(workspaceData) ?? null;
+          const originalDecision = activePlan.decision || this.planner.decisionEngine?.cache?.getDecision?.() || null;
+          let resolvedDecision = null;
+
+          if (originalDecision && this.planner.decisionEngine?.resolveClarification) {
+            resolvedDecision = this.planner.decisionEngine.resolveClarification(originalDecision, userInput, summary);
+          } else if (originalDecision) {
+            resolvedDecision = originalDecision;
+          }
+
+          const rebuiltPlan = this.planner.createPlan(originalRequest, originalAnalysis, workspaceData, resolvedDecision);
+          const plan = rebuiltPlan;
 
           let step = this.planner.nextStep();
           let iteration = 1;
@@ -199,8 +202,8 @@ export class CodingAgent {
               };
             }
 
-            const stepContextText = `Plan Goal: "${activePlan.goal}"
-Current Step (${iteration}/${activePlan.raw?.steps?.length || 1}): "${step.description}" (Target: "${step.target}", Type: "${step.type}")
+            const stepContextText = `Plan Goal: "${plan.goal?.goal || plan.goal || activePlan.goal}"
+Current Step (${iteration}/${plan.steps?.length || 1}): "${step.description}" (Target: "${step.target}", Type: "${step.type}")
 Please execute this step by calling the appropriate tool. Output ONLY a single JSON tool_call. Do NOT include markdown wrapping or explanation text outside JSON.`;
 
             const stepMessages = this.promptBuilder.build(
@@ -277,8 +280,39 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
 
             this.planner.recordStepResult(step.id, stepResult);
 
+            if (parsed.tool === "write_file" && toolResult.success) {
+              workspaceData = await this.refreshWorkspaceData();
+            }
+
             if (!toolResult.success) {
               const strategy = step.failureStrategy;
+              if (parsed.tool === "terminal_execute" || toolResult.message?.includes("disabled")) {
+                this.planner.tracker.status = "WaitingForManualAction";
+                const manualInstruction = `This step requires manual action. Please run:\n${step.target}\n\nAfter installation, type: continue`;
+                newMemoryMessages.push(this.createAssistantMessage(manualInstruction));
+                this.persistMemoryMessages(newMemoryMessages);
+                this.planner.cache.savePlan(this.planner.tracker.plan, this.planner.tracker, this.planner.decisionEngine.cache);
+
+                this.emitDone({
+                  role: "assistant",
+                  done: true,
+                  iterations: iteration,
+                  toolCount: toolResults.length,
+                  success: true,
+                });
+
+                return {
+                  type: "response",
+                  role: "assistant",
+                  content: manualInstruction,
+                  thinking: "",
+                  done: true,
+                  raw: {},
+                  iterations: iteration,
+                  toolResults,
+                };
+              }
+
               if (strategy === "abort") {
                 const errorResult = {
                   type: "agent_error",
@@ -313,7 +347,7 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
             iteration++;
           }
 
-          const finalContent = `Plan completed successfully. Goal achieved: "${activePlan.goal}"`;
+          const finalContent = `Plan completed successfully. Goal achieved: "${plan.goal?.goal || plan.goal || activePlan.goal}"`;
           const finalMsg = { role: "assistant", content: finalContent };
           newMemoryMessages.push(finalMsg);
           this.persistMemoryMessages(newMemoryMessages);
@@ -527,8 +561,39 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
 
           this.planner.recordStepResult(step.id, stepResult);
 
+          if (parsed.tool === "write_file" && toolResult.success) {
+            workspaceData = await this.refreshWorkspaceData();
+          }
+
           if (!toolResult.success) {
             const strategy = step.failureStrategy;
+            if (parsed.tool === "terminal_execute" || toolResult.message?.includes("disabled")) {
+              this.planner.tracker.status = "WaitingForManualAction";
+              const manualInstruction = `This step requires manual action. Please run:\n${step.target}\n\nAfter installation, type: continue`;
+              newMemoryMessages.push(this.createAssistantMessage(manualInstruction));
+              this.persistMemoryMessages(newMemoryMessages);
+              this.planner.cache.savePlan(this.planner.tracker.plan, this.planner.tracker, this.planner.decisionEngine.cache);
+
+              this.emitDone({
+                role: "assistant",
+                done: true,
+                iterations: iteration,
+                toolCount: toolResults.length,
+                success: true,
+              });
+
+              return {
+                type: "response",
+                role: "assistant",
+                content: manualInstruction,
+                thinking: "",
+                done: true,
+                raw: {},
+                iterations: iteration,
+                toolResults,
+              };
+            }
+
             if (strategy === "abort") {
               const errorResult = {
                 type: "agent_error",
@@ -664,6 +729,10 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
         messages.push(toolMessage);
         newMemoryMessages.push(toolMessage);
 
+        if (parsed.tool === "write_file" && toolResult.success) {
+          await this.refreshWorkspaceData();
+        }
+
         this.emitStatus("Continuing", {
           phase: "continuing",
           iteration,
@@ -715,6 +784,26 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
         toolResults: [],
       };
     }
+  }
+
+  async refreshWorkspaceData() {
+    if (!this.workspaceService) {
+      return null;
+    }
+
+    if (typeof this.workspaceService.refresh === "function") {
+      return this.workspaceService.refresh();
+    }
+
+    if (typeof this.workspaceService.invalidate === "function") {
+      this.workspaceService.invalidate();
+    }
+
+    if (typeof this.workspaceService.load === "function") {
+      return this.workspaceService.load();
+    }
+
+    return null;
   }
 
   /**
@@ -788,7 +877,7 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
     if (parsed.tool === "write_file") {
       const filePath = parsed.args?.path;
       if (filePath && typeof filePath === "string") {
-        const resolvedPath = tool.resolvePath(filePath);
+        const resolvedPath = typeof tool.resolvePath === "function" ? tool.resolvePath(filePath) : filePath;
         const fileExists = await access(resolvedPath).then(() => true).catch(() => false);
 
         if (fileExists) {
@@ -805,6 +894,8 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
               workspace: workspaceData,
               targetFile: resolvedPath,
             });
+
+            await this.refreshWorkspaceData();
 
             const result = this.createToolResult(
               "write_file",
@@ -852,6 +943,10 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
     try {
       const rawResult = await tool.execute(parsed.args);
       const normalizedResult = this.normalizeToolResult(parsed.tool, rawResult);
+
+      if (parsed.tool === "write_file" && normalizedResult.success) {
+        await this.refreshWorkspaceData();
+      }
 
       this.emitStatus(
         normalizedResult.success ? "Tool Finished" : "Tool Failed",
