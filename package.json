@@ -1,0 +1,27 @@
+{
+  "name": "ai_agent",
+  "version": "1.0.0",
+  "description": "Local AI Agent powered by Ollama and Qwen3",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/myahyazahid/Ai_Agent.git"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "ollama",
+    "qwen"
+  ],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/myahyazahid/Ai_Agent/issues"
+  },
+  "homepage": "https://github.com/myahyazahid/Ai_Agent#readme"
+}
