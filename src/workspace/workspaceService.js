@@ -6,6 +6,7 @@ import projectAnalyzer from "./projectAnalyzer.js";
 import dependencyAnalyzer from "./dependencyAnalyzer.js";
 import entryPointDetector from "./entryPointDetector.js";
 import workspaceCache from "./workspaceCache.js";
+import architectureAnalyzer from "./architectureAnalyzer.js";
 
 /**
  * @typedef {object} WorkspaceData
@@ -17,6 +18,7 @@ import workspaceCache from "./workspaceCache.js";
  * @property {Array<{name: string, version: string}>} dependencies
  * @property {Array<{name: string, version: string}>} devDependencies
  * @property {string[]} configFiles
+ * @property {import("./architectureAnalyzer.js").ArchitectureMap | null} architectureMap
  * @property {object} workspaceTree
  * @property {{
  *   totalFiles: number,
@@ -50,6 +52,7 @@ export class WorkspaceService {
    * @param {import("./projectAnalyzer.js").ProjectAnalyzer} [options.projectAnalyzer]
    * @param {import("./dependencyAnalyzer.js").DependencyAnalyzer} [options.dependencyAnalyzer]
    * @param {import("./entryPointDetector.js").EntryPointDetector} [options.entryPointDetector]
+   * @param {import("./architectureAnalyzer.js").ArchitectureAnalyzer} [options.architectureAnalyzer]
    */
   constructor({
     workspaceRoot = process.cwd(),
@@ -59,6 +62,7 @@ export class WorkspaceService {
     projectAnalyzer: analyzer = projectAnalyzer,
     dependencyAnalyzer: depAnalyzer = dependencyAnalyzer,
     entryPointDetector: entryDetector = entryPointDetector,
+    architectureAnalyzer: archAnalyzer = architectureAnalyzer,
   } = {}) {
     this.workspaceRoot = workspaceRoot;
     this.eventBus = serviceEventBus;
@@ -67,6 +71,7 @@ export class WorkspaceService {
     this.projectAnalyzer = analyzer;
     this.dependencyAnalyzer = depAnalyzer;
     this.entryPointDetector = entryDetector;
+    this.architectureAnalyzer = archAnalyzer;
 
     /** @type {WorkspaceData | null} */
     this._lastResult = null;
@@ -187,6 +192,15 @@ export class WorkspaceService {
   }
 
   /**
+   * Get the architecture map, or null if not yet loaded.
+   *
+   * @returns {import("./architectureAnalyzer.js").ArchitectureMap | null}
+   */
+  getArchitectureMap() {
+    return this._lastResult?.architectureMap ?? null;
+  }
+
+  /**
    * Get the workspace tree structure.
    *
    * @returns {object | null}
@@ -274,7 +288,14 @@ export class WorkspaceService {
     // Step 4: Detect entry point
     const entryInfo = await this.entryPointDetector.detect(scanResult, projectInfo);
 
-    // Step 5: Build statistics
+    // Step 5a: Classify file architecture roles
+    const architectureMap = this.architectureAnalyzer.analyze(
+      scanResult,
+      projectInfo,
+      entryInfo.entryPoint
+    );
+
+    // Step 5b: Build statistics
     const stats = this._buildStats(scanResult);
 
     // Step 6: Assemble workspace data
@@ -288,6 +309,7 @@ export class WorkspaceService {
       dependencies: depInfo.dependencies,
       devDependencies: depInfo.devDependencies,
       configFiles: projectInfo.configFiles,
+      architectureMap,
       workspaceTree: scanResult.tree,
       stats,
       root: scanResult.root,

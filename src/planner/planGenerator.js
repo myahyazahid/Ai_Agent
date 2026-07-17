@@ -1,5 +1,7 @@
 // src/planner/planGenerator.js
 
+import featurePlacementPlanner from "./featurePlacementPlanner.js";
+
 /**
  * @typedef {object} Goal
  * @property {string} goal - Goal summary description.
@@ -10,12 +12,14 @@
 /**
  * @typedef {object} Step
  * @property {string} id - Unique step ID identifier.
- * @property {"read" | "edit" | "tool"} type - Conceptual action type of step.
+ * @property {"read" | "edit" | "tool" | "clarification"} type - Conceptual action type of step.
  * @property {string} target - Target path or scope.
  * @property {string} description - Step description.
  * @property {string[]} dependsOn - Prerequisite step ID array.
  * @property {"retry" | "abort" | "skip"} failureStrategy - Strategy to apply on failure.
  * @property {"pending" | "running" | "completed" | "failed" | "skipped"} status - Active status.
+ * @property {string} [role] - Architectural role of the target file.
+ * @property {string} [reasoning] - Placement reasoning for traceability.
  */
 
 /**
@@ -26,6 +30,10 @@
 
 /**
  * Generates structured plans for task execution.
+ *
+ * Uses FeaturePlacementPlanner to resolve the correct target files
+ * based on the project's architecture map, instead of hardcoding
+ * the entry point as the default target.
  */
 export class PlanGenerator {
   /**
@@ -33,9 +41,11 @@ export class PlanGenerator {
    *
    * @param {string} requestText - User request text.
    * @param {import("./taskAnalyzer.js").TaskAnalysis} analysis - Analysis details.
+   * @param {object | null} [decision] - Strategy decision from DecisionEngine.
+   * @param {import("../workspace/workspaceService.js").WorkspaceData | null} [workspaceData] - Full workspace data.
    * @returns {Plan}
    */
-  generate(requestText, analysis, decision = null) {
+  generate(requestText, analysis, decision = null, workspaceData = null) {
     const goal = {
       goal: requestText,
       type: analysis.category,
@@ -59,10 +69,21 @@ export class PlanGenerator {
       return { goal, steps };
     }
 
-    const entry = "src/index.js";
     const projectStrategy = decision?.projectStrategy || decision?.strategy || "none";
     const authenticationStrategy = decision?.authenticationStrategy || "none";
-    const fallbackMode = projectStrategy === "express" && decision?.confidence < 0.6;
+
+    // --- Architecture-Aware Target Resolution ---
+    // Resolve WHERE the feature should be implemented using FeaturePlacementPlanner.
+    // This replaces the previous hardcoded `const entry = "src/index.js"`.
+    const placement = featurePlacementPlanner.plan(
+      requestText,
+      workspaceData?.architectureMap ?? null,
+      workspaceData
+    );
+
+    const implementTarget = placement.implementationTarget;
+    const integrateTarget = placement.integrationTarget; // null if no integration step needed
+    const fallbackEntry = workspaceData?.entryPoint ?? "src/index.js";
 
     if (analysis.category === "feature" || requestText.toLowerCase().includes("auth") || requestText.toLowerCase().includes("login")) {
       if (projectStrategy === "express") {
@@ -77,21 +98,13 @@ export class PlanGenerator {
         });
 
         steps.push({
-          id: "step_create_express_app",
+          id: "step_create_module",
           type: "edit",
-          target: entry,
-          description: "Create an Express application entrypoint",
+          target: implementTarget,
+          description: `Create dedicated module: ${implementTarget}`,
+          role: placement.targetRole,
+          reasoning: placement.reasoning,
           dependsOn: ["step_install_express"],
-          failureStrategy: "abort",
-          status: "pending",
-        });
-
-        steps.push({
-          id: "step_create_login_route",
-          type: "edit",
-          target: entry,
-          description: "Create a login endpoint inside the Express app",
-          dependsOn: ["step_create_express_app"],
           failureStrategy: "abort",
           status: "pending",
         });
@@ -102,7 +115,7 @@ export class PlanGenerator {
             type: "tool",
             target: "npm install jsonwebtoken",
             description: "Install JWT dependency",
-            dependsOn: ["step_create_login_route"],
+            dependsOn: ["step_create_module"],
             failureStrategy: "retry",
             status: "pending",
           });
@@ -112,18 +125,35 @@ export class PlanGenerator {
             type: "edit",
             target: "src/middleware/auth.js",
             description: "Create JWT authentication middleware",
+            role: "middleware",
             dependsOn: ["step_install_jwt"],
             failureStrategy: "abort",
             status: "pending",
           });
 
+          if (integrateTarget) {
+            steps.push({
+              id: "step_integrate_entry",
+              type: "edit",
+              target: integrateTarget,
+              description: `Register module in entry point: import from '${implementTarget}'`,
+              role: "entry_point",
+              reasoning: "Integration step only — adds import/registration, no feature logic.",
+              dependsOn: ["step_create_auth_middleware"],
+              failureStrategy: "skip",
+              status: "pending",
+            });
+          }
+        } else if (integrateTarget) {
           steps.push({
-            id: "step_generate_token",
+            id: "step_integrate_entry",
             type: "edit",
-            target: entry,
-            description: "Generate JWT tokens for the login flow",
-            dependsOn: ["step_create_auth_middleware"],
-            failureStrategy: "abort",
+            target: integrateTarget,
+            description: `Register module in entry point: import from '${implementTarget}'`,
+            role: "entry_point",
+            reasoning: "Integration step only — adds import/registration, no feature logic.",
+            dependsOn: ["step_create_module"],
+            failureStrategy: "skip",
             status: "pending",
           });
         }
@@ -131,59 +161,60 @@ export class PlanGenerator {
         steps.push({
           id: "step_verify",
           type: "tool",
-          target: `node --check ${entry}`,
-          description: `Verify server syntax on ${entry}`,
-          dependsOn: ["step_create_login_route"],
-          failureStrategy: "skip",
-          status: "pending",
-        });
-      } else if (fallbackMode) {
-        steps.push({
-          id: "step_read_entry",
-          type: "read",
-          target: entry,
-          description: `Read entrypoint configuration at ${entry}`,
-          dependsOn: [],
-          failureStrategy: "retry",
-          status: "pending",
-        });
-
-        steps.push({
-          id: "step_create_endpoint",
-          type: "edit",
-          target: entry,
-          description: `Add login route endpoint directly to ${entry}`,
-          dependsOn: ["step_read_entry"],
-          failureStrategy: "abort",
-          status: "pending",
-        });
-
-        steps.push({
-          id: "step_verify",
-          type: "tool",
-          target: `node --check ${entry}`,
-          description: `Verify server syntax on ${entry}`,
-          dependsOn: ["step_create_endpoint"],
+          target: `node --check ${implementTarget}`,
+          description: `Verify syntax on ${implementTarget}`,
+          dependsOn: ["step_create_module"],
           failureStrategy: "skip",
           status: "pending",
         });
       } else {
+        // Non-Express strategy: create dedicated module, integrate if needed.
         steps.push({
-          id: "step_default",
+          id: "step_create_module",
           type: "edit",
-          target: entry,
-          description: `Execute request action: ${requestText}`,
+          target: implementTarget,
+          description: `Create dedicated module: ${implementTarget}`,
+          role: placement.targetRole,
+          reasoning: placement.reasoning,
           dependsOn: [],
           failureStrategy: "abort",
           status: "pending",
         });
+
+        if (integrateTarget) {
+          steps.push({
+            id: "step_integrate_entry",
+            type: "edit",
+            target: integrateTarget,
+            description: `Register module in entry point: import from '${implementTarget}'`,
+            role: "entry_point",
+            reasoning: "Integration step only — adds import/registration, no feature logic.",
+            dependsOn: ["step_create_module"],
+            failureStrategy: "skip",
+            status: "pending",
+          });
+        }
+
+        steps.push({
+          id: "step_verify",
+          type: "tool",
+          target: `node --check ${implementTarget}`,
+          description: `Verify syntax on ${implementTarget}`,
+          dependsOn: ["step_create_module"],
+          failureStrategy: "skip",
+          status: "pending",
+        });
       }
     } else if (analysis.category === "refactor" || analysis.category === "bug_fix") {
+      // For refactor/bug_fix, read the target file first then apply the fix.
+      // Use the placement result as the target (it may have found an existing file).
+      const fixTarget = placement.isNewFile ? fallbackEntry : implementTarget;
+
       steps.push({
         id: "step_read_source",
         type: "read",
-        target: entry,
-        description: `Read target source file: ${entry}`,
+        target: fixTarget,
+        description: `Read target source file: ${fixTarget}`,
         dependsOn: [],
         failureStrategy: "retry",
         status: "pending",
@@ -192,8 +223,10 @@ export class PlanGenerator {
       steps.push({
         id: "step_apply_fix",
         type: "edit",
-        target: entry,
+        target: fixTarget,
         description: `Apply modifications: ${requestText}`,
+        role: placement.targetRole,
+        reasoning: placement.reasoning,
         dependsOn: ["step_read_source"],
         failureStrategy: "abort",
         status: "pending",
@@ -202,18 +235,21 @@ export class PlanGenerator {
       steps.push({
         id: "step_verify_syntax",
         type: "tool",
-        target: `node --check ${entry}`,
-        description: `Run syntax check on modified file: ${entry}`,
+        target: `node --check ${fixTarget}`,
+        description: `Run syntax check on modified file: ${fixTarget}`,
         dependsOn: ["step_apply_fix"],
         failureStrategy: "abort",
         status: "pending",
       });
     } else {
+      // Generic fallback: use placement result for target.
       steps.push({
         id: "step_default",
         type: "edit",
-        target: entry,
+        target: implementTarget,
         description: `Execute request action: ${requestText}`,
+        role: placement.targetRole,
+        reasoning: placement.reasoning,
         dependsOn: [],
         failureStrategy: "abort",
         status: "pending",

@@ -9,6 +9,7 @@ import planCache from "./planCache.js";
 import projectInspector from "./projectInspector.js";
 import decisionEngine from "../decision/decisionEngine.js";
 import eventBus from "../core/eventBus.js";
+import featurePlacementPlanner from "./featurePlacementPlanner.js";
 
 /**
  * Public facade orchestrator for the Planner Layer.
@@ -25,6 +26,7 @@ export class Planner {
    * @param {import("./planCache.js").PlanCache} [options.cache]
    * @param {import("./projectInspector.js").ProjectInspector} [options.inspector]
    * @param {import("../decision/decisionEngine.js").DecisionEngine} [options.decisionEngine]
+   * @param {import("./featurePlacementPlanner.js").FeaturePlacementPlanner} [options.placementPlanner]
    * @param {import("../core/eventBus.js").AgentEventBus} [options.eventBus]
    */
   constructor({
@@ -36,6 +38,7 @@ export class Planner {
     cache = planCache,
     inspector = projectInspector,
     decisionEngine: decEngine = decisionEngine,
+    placementPlanner = featurePlacementPlanner,
     eventBus: plannerEventBus = eventBus,
   } = {}) {
     this.analyzer = analyzer;
@@ -46,6 +49,7 @@ export class Planner {
     this.cache = cache;
     this.inspector = inspector;
     this.decisionEngine = decEngine;
+    this.placementPlanner = placementPlanner;
     this.eventBus = plannerEventBus;
   }
 
@@ -84,17 +88,32 @@ export class Planner {
     // 2. Select strategy using DecisionEngine unless a clarified decision was supplied.
     const resolvedDecision = decision ?? this.decisionEngine.makeDecision(requestText, analysis, summary);
 
-    // 3. Generate plan containing Goal and raw steps using decision summary
-    const plan = this.generator.generate(requestText, analysis, resolvedDecision);
+    // 3. Resolve feature placement using architecture map
+    this.emitStatus("Resolving feature placement", { phase: "planner:placement" });
+    const placement = this.placementPlanner.plan(
+      requestText,
+      workspaceData?.architectureMap ?? null,
+      workspaceData
+    );
+    this.emitStatus("Placement resolved", {
+      phase: "planner:placement-resolved",
+      implementationTarget: placement.implementationTarget,
+      integrationTarget: placement.integrationTarget,
+      targetRole: placement.targetRole,
+      reasoning: placement.reasoning,
+    });
 
-    // 4. Validate structural constraints
+    // 4. Generate plan containing Goal and raw steps using decision + workspaceData
+    const plan = this.generator.generate(requestText, analysis, resolvedDecision, workspaceData);
+
+    // 5. Validate structural constraints
     this.validator.validate(plan);
 
-    // 5. Resolve linear order via topological dependency sorting
+    // 6. Resolve linear order via topological dependency sorting
     const sortedSteps = this.resolver.resolve(plan.steps);
     plan.steps = sortedSteps;
 
-    // 6. Initialize tracker and cache
+    // 7. Initialize tracker and cache
     this.tracker.init(plan);
     this.cache.savePlan(plan, this.tracker, this.decisionEngine.cache);
 

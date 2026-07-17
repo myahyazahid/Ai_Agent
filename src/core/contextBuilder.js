@@ -43,6 +43,8 @@ export class ContextBuilder {
       "",
       this.formatSummary(workspace),
       "",
+      this.formatArchitecture(workspace.architectureMap, workspace.entryPoint),
+      "",
       this.formatDependencies(workspace),
       "",
       this.formatRelevantFiles(relevantFiles),
@@ -96,6 +98,69 @@ export class ContextBuilder {
       const names = devDeps.map((d) => d.name).join(", ");
       lines.push(`Dev Dependencies: ${names}`);
     }
+
+    return lines.join("\n");
+  }
+
+  /**
+   * Format the architecture map into a structured, LLM-readable block.
+   * Each entry shows the directory/file path, its role, purpose, and editing guideline.
+   *
+   * @param {import("../workspace/architectureAnalyzer.js").ArchitectureMap | null} architectureMap
+   * @param {string | null} entryPoint
+   * @returns {string}
+   */
+  formatArchitecture(architectureMap, entryPoint) {
+    if (!architectureMap) {
+      return "";
+    }
+
+    const lines = ["Project Architecture:"];
+
+    // Always render the entry point first with prominent warning
+    if (entryPoint) {
+      const epMeta = architectureMap.roleIndex?.[entryPoint];
+      const meta = architectureMap.files?.find((f) => f.relativePath === entryPoint)?.metadata;
+      lines.push(`  Entry Point: ${entryPoint}`);
+      lines.push(`    Role: entry_point`);
+      if (meta) {
+        lines.push(`    Purpose: ${meta.purpose}`);
+        lines.push(`    Guideline: ${meta.guideline}`);
+      }
+      lines.push("");
+    }
+
+    // Group remaining files by their directory and emit one line per unique directory role
+    const dirRoleIndex = architectureMap.dirRoleIndex ?? {};
+    const emittedDirs = new Set();
+    if (entryPoint) {
+      const epDir = entryPoint.includes("/")
+        ? entryPoint.substring(0, entryPoint.lastIndexOf("/"))
+        : ".";
+      emittedDirs.add(epDir);
+    }
+
+    // Collect unique directories that have a known role (not unknown)
+    for (const [dir, role] of Object.entries(dirRoleIndex)) {
+      if (role === "unknown" || role === "entry_point" || emittedDirs.has(dir)) continue;
+      emittedDirs.add(dir);
+
+      // Find one example file to get the metadata
+      const exampleFile = architectureMap.files?.find(
+        (f) => (f.relativePath.startsWith(dir + "/") || f.relativePath === dir) && f.role === role
+      );
+      const meta = exampleFile?.metadata;
+
+      lines.push(`  ${dir}/ [${role}]`);
+      if (meta) {
+        lines.push(`    Purpose: ${meta.purpose}`);
+        lines.push(`    Guideline: ${meta.guideline}`);
+      }
+      lines.push("");
+    }
+
+    // Remove trailing empty line
+    while (lines[lines.length - 1] === "") lines.pop();
 
     return lines.join("\n");
   }

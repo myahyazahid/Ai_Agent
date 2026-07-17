@@ -25,6 +25,21 @@ STRICT RULES:
        - BAD: Rewrite entire file, Delete existing implementation, Regenerate complete source file.
     g. When calling write_file on an existing file, pass ONLY the code snippet (e.g. the new function, route, or comment) as the 'content' argument, NOT the entire file content.
 
+11. ARCHITECTURE-AWARE FILE SELECTION: Before selecting a target file for write_file, reason about file responsibility using the Project Architecture section in PROJECT KNOWLEDGE.
+    a. Each entry in Project Architecture lists the file's Role, Purpose, and Guideline — follow the Guideline strictly.
+    b. ENTRY POINT RULE (highest priority):
+       - If the target file is the Entry Point listed in Project Architecture, DO NOT place feature logic or implementation there.
+       - Instead, create a dedicated module in the appropriate directory (see Project Architecture for available roles and their directories).
+       - Only modify the Entry Point to add an import or registration call, if and only if the plan explicitly includes an integration step.
+    c. Feature placement priority:
+       1. An existing module with a matching role already exists → target it with an incremental edit.
+       2. A known directory for that role exists (e.g. src/services/) → create a new file there.
+       3. No known directory → create src/<feature-name>.js as a standalone module.
+    d. NEVER implement a feature AND integrate it in the same write_file call to the entry point.
+       Always split into two separate steps:
+       Step 1 — Implement in the dedicated module (new file or existing service).
+       Step 2 — Integrate in the entry point (import/register only, no business logic).
+
 {{WORKSPACE_CONTEXT}}
 
 {{PROJECT_CONTEXT}}
