@@ -128,7 +128,8 @@ export class ProjectAnalyzer {
    *   framework: string | null,
    *   runtime: string | null,
    *   packageManager: string | null,
-   *   configFiles: string[]
+   *   configFiles: string[],
+   *   moduleSystem: "esm" | "commonjs" | null
    * }>}
    */
   async analyze(scanResult) {
@@ -153,6 +154,9 @@ export class ProjectAnalyzer {
       if (fileNames.has("tsconfig.json")) {
         baseResult.language = "TypeScript";
       }
+
+      // Detect module system from package.json.
+      baseResult.moduleSystem = await this.detectModuleSystem(scanResult.root);
     }
 
     // Refine package manager from lockfile.
@@ -203,7 +207,27 @@ export class ProjectAnalyzer {
     return {
       ...baseResult,
       configFiles,
+      moduleSystem: baseResult.moduleSystem ?? null,
     };
+  }
+
+  /**
+   * Detect the JavaScript module system from package.json.
+   *
+   * @param {string} root
+   * @returns {Promise<"esm" | "commonjs" | null>}
+   */
+  async detectModuleSystem(root) {
+    try {
+      const raw = await readFile(path.join(root, "package.json"), "utf8");
+      const pkg = JSON.parse(raw);
+      if (pkg.type === "module") return "esm";
+      // If package.json exists but `type` is absent/commonjs, it is CJS.
+      return "commonjs";
+    } catch {
+      // package.json not found or not parseable — module system unknown.
+      return null;
+    }
   }
 
   /**

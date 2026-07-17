@@ -247,3 +247,20 @@ function chat() {
 chat();
 // Test Editing Engine
 // yahya ganteng
+const { login } = require('./providers/login');
+
+(async () => {
+  try {
+    const authenticated = await login();
+    if (authenticated) {
+      console.log('Authenticated. Starting AI agent...');
+      // Initialize core components here
+    } else {
+      console.error('Authentication failed. Exiting.');
+      process.exit(1);
+    }
+  } catch (error) {
+    console.error('Login failed:', error.message);
+    process.exit(1);
+  }
+})();

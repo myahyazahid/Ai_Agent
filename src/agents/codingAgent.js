@@ -10,6 +10,7 @@ import workspaceService from "../workspace/workspaceService.js";
 import contextEngine from "../context/contextEngine.js";
 import editingEngine from "../editing/editingEngine.js";
 import planner from "../planner/planner.js";
+import { validateModuleSystem } from "../utils/codeValidator.js";
 
 
 const DEFAULT_MAX_ITERATIONS = 15;
@@ -886,6 +887,27 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
             const userMessages = this.memory.get().filter(m => m.role === "user");
             const lastUserRequest = userMessages[userMessages.length - 1]?.content || "Modify file";
 
+            // Validate module system before writing to an existing file.
+            if (parsed.args?.content) {
+              const moduleSystem = workspaceData?.moduleSystem ?? null;
+              const moduleValidation = validateModuleSystem(parsed.args.content, moduleSystem, filePath);
+
+              if (!moduleValidation.valid) {
+                const violations = moduleValidation.violations.map(v => `  - ${v}`).join("\n");
+                const result = this.createToolResult(
+                  "write_file",
+                  false,
+                  `Module system violation — cannot write '${filePath}'.\n` +
+                  `Violations:\n${violations}\n\n` +
+                  `Correction required: ${moduleValidation.suggestion}`
+                );
+                this.emitStatus("Tool Failed", {
+                  phase: "tool_failed", tool: parsed.tool, args: parsed.args, iteration, result,
+                });
+                return result;
+              }
+            }
+
             const editResult = await this.editingEngine.applyEdit({
               request: {
                 text: lastUserRequest,
@@ -894,6 +916,7 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
               workspace: workspaceData,
               targetFile: resolvedPath,
             });
+
 
             const result = this.createToolResult(
               "write_file",
@@ -937,6 +960,31 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
       args: parsed.args,
       iteration,
     });
+
+    // For write_file on a new file, validate module system before writing.
+    if (parsed.tool === "write_file" && parsed.args?.content && parsed.args?.path) {
+      const moduleSystem = workspaceData?.moduleSystem ?? null;
+      const moduleValidation = validateModuleSystem(
+        parsed.args.content,
+        moduleSystem,
+        parsed.args.path
+      );
+
+      if (!moduleValidation.valid) {
+        const violations = moduleValidation.violations.map(v => `  - ${v}`).join("\n");
+        const result = this.createToolResult(
+          "write_file",
+          false,
+          `Module system violation — cannot write '${parsed.args.path}'.\n` +
+          `Violations:\n${violations}\n\n` +
+          `Correction required: ${moduleValidation.suggestion}`
+        );
+        this.emitStatus("Tool Failed", {
+          phase: "tool_failed", tool: parsed.tool, args: parsed.args, iteration, result,
+        });
+        return result;
+      }
+    }
 
     try {
       const rawResult = await tool.execute(parsed.args);

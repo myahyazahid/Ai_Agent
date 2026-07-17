@@ -43,6 +43,8 @@ export class ContextBuilder {
       "",
       this.formatSummary(workspace),
       "",
+      this.formatModuleConstraints(workspace.moduleSystem),
+      "",
       this.formatArchitecture(workspace.architectureMap, workspace.entryPoint),
       "",
       this.formatDependencies(workspace),
@@ -76,6 +78,56 @@ export class ContextBuilder {
     ];
 
     return lines.join("\n");
+  }
+
+  /**
+   * Convert detected module system into mandatory code generation constraints.
+   * Returns an empty string when module system is unknown so the prompt is
+   * never polluted with empty constraint blocks.
+   *
+   * @param {"esm" | "commonjs" | null} moduleSystem
+   * @returns {string}
+   */
+  formatModuleConstraints(moduleSystem) {
+    if (!moduleSystem) return "";
+
+    if (moduleSystem === "esm") {
+      return [
+        "Project Constraints — Module System: ES Module (ESM)",
+        "",
+        "Generated JavaScript/TypeScript MUST:",
+        "  - Use import/export syntax (e.g. import { x } from './module.js')",
+        "  - Include the .js file extension in all local import paths",
+        "  - Use 'export default' or 'export const/function/class' for exports",
+        "",
+        "Generated JavaScript/TypeScript MUST NOT:",
+        "  - Use require() — this is a CommonJS pattern and WILL crash in ESM",
+        "  - Use module.exports = ... or exports.x = ...",
+        "  - Omit .js extension on local relative imports",
+        "",
+        "These are mandatory constraints. Generating code that violates them will",
+        "cause a runtime error and be rejected before writing.",
+      ].join("\n");
+    }
+
+    if (moduleSystem === "commonjs") {
+      return [
+        "Project Constraints — Module System: CommonJS (CJS)",
+        "",
+        "Generated JavaScript MUST:",
+        "  - Use require() for imports (e.g. const { x } = require('./module'))",
+        "  - Use module.exports = ... or exports.x = ... for exports",
+        "",
+        "Generated JavaScript MUST NOT:",
+        "  - Use import ... from syntax",
+        "  - Use export default or export const/function/class syntax",
+        "",
+        "These are mandatory constraints. Generating code that violates them will",
+        "cause a runtime error and be rejected before writing.",
+      ].join("\n");
+    }
+
+    return "";
   }
 
   /**

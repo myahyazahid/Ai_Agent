@@ -18,6 +18,7 @@ import architectureAnalyzer from "./architectureAnalyzer.js";
  * @property {Array<{name: string, version: string}>} dependencies
  * @property {Array<{name: string, version: string}>} devDependencies
  * @property {string[]} configFiles
+ * @property {"esm" | "commonjs" | null} moduleSystem
  * @property {import("./architectureAnalyzer.js").ArchitectureMap | null} architectureMap
  * @property {object} workspaceTree
  * @property {{
@@ -201,6 +202,15 @@ export class WorkspaceService {
   }
 
   /**
+   * Get the detected module system, or null if not yet loaded.
+   *
+   * @returns {"esm" | "commonjs" | null}
+   */
+  getModuleSystem() {
+    return this._lastResult?.moduleSystem ?? null;
+  }
+
+  /**
    * Get the workspace tree structure.
    *
    * @returns {object | null}
@@ -309,6 +319,7 @@ export class WorkspaceService {
       dependencies: depInfo.dependencies,
       devDependencies: depInfo.devDependencies,
       configFiles: projectInfo.configFiles,
+      moduleSystem: projectInfo.moduleSystem ?? null,
       architectureMap,
       workspaceTree: scanResult.tree,
       stats,
