@@ -136,7 +136,7 @@ export class CodingAgent {
           });
 
           const recentFiles = this.extractRecentFiles(history);
-          const workspaceData = await this.workspaceService.load();
+          let workspaceData = await this.workspaceService.load();
           const contextEngineResult = await this.contextEngine.build({
             request: activePlan.goal,
             workspace: workspaceData,
@@ -413,7 +413,7 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
       }
 
       // Load project-level knowledge (cached after first scan).
-      const workspaceData = await this.workspaceService.load();
+      let workspaceData = await this.workspaceService.load();
 
       const history = this.memory.get();
       const context = this.workspaceContext.build({
@@ -895,8 +895,6 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
               targetFile: resolvedPath,
             });
 
-            await this.refreshWorkspaceData();
-
             const result = this.createToolResult(
               "write_file",
               true,
@@ -943,10 +941,6 @@ Please execute this step by calling the appropriate tool. Output ONLY a single J
     try {
       const rawResult = await tool.execute(parsed.args);
       const normalizedResult = this.normalizeToolResult(parsed.tool, rawResult);
-
-      if (parsed.tool === "write_file" && normalizedResult.success) {
-        await this.refreshWorkspaceData();
-      }
 
       this.emitStatus(
         normalizedResult.success ? "Tool Finished" : "Tool Failed",
