@@ -95,7 +95,7 @@ export class Planner {
 
     // 6. Initialize tracker and cache
     this.tracker.init(plan);
-    this.cache.savePlan(plan);
+    this.cache.savePlan(plan, this.tracker, this.decisionEngine.cache);
 
     return plan;
   }
@@ -112,6 +112,7 @@ export class Planner {
 
     const { remainingSteps } = this.tracker.getProgress();
     if (remainingSteps.length === 0) {
+      this.tracker.status = "Completed";
       this.emitStatus("Plan completed", { phase: "planner:completed" });
       return null;
     }
@@ -119,7 +120,12 @@ export class Planner {
     // Expose the first pending step
     const next = remainingSteps.find((s) => s.status === "pending");
     if (next) {
-      this.tracker.markStepRunning(next.id);
+      if (next.type === "clarification") {
+        this.tracker.status = "WaitingForUser";
+      } else {
+        this.tracker.markStepRunning(next.id);
+        this.tracker.status = "Executing";
+      }
       
       const idx = this.tracker.plan.steps.findIndex((s) => s.id === next.id) + 1;
       const total = this.tracker.plan.steps.length;

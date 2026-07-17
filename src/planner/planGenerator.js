@@ -45,11 +45,13 @@ export class PlanGenerator {
     const steps = [];
 
     if (decision?.strategy === "clarify") {
+      const question = `${decision.reason} Do you want to: ${decision.alternatives.map((alt, idx) => `\n  ${idx + 1}. ${alt}`).join("")}`;
       steps.push({
         id: "step_clarify",
-        type: "tool",
-        target: "clarify",
-        description: `Clarify with user: ${decision.reason}. Alternatives: ${decision.alternatives.join(" | ")}`,
+        type: "clarification",
+        target: "user",
+        description: decision.reason,
+        question,
         dependsOn: [],
         failureStrategy: "abort",
         status: "pending",

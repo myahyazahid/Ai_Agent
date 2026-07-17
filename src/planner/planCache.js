@@ -8,25 +8,51 @@ export class PlanCache {
   constructor() {
     /** @type {object | null} */
     this._lastPlan = null;
+    /** @type {object | null} */
+    this._rawPlan = null;
   }
 
   /**
-   * Save a plan.
+   * Save a plan with progress details.
    *
    * @param {object} plan
+   * @param {object} [tracker]
+   * @param {object} [decCache]
    * @returns {void}
    */
-  savePlan(plan) {
-    this._lastPlan = plan;
+  savePlan(plan, tracker = null, decCache = null) {
+    if (!plan) {
+      this._lastPlan = null;
+      this._rawPlan = null;
+      return;
+    }
+    this._rawPlan = plan;
+    const prog = tracker ? tracker.getProgress() : { currentStep: null, progressPercentage: 0 };
+    this._lastPlan = {
+      goal: plan.goal?.goal || plan.goal,
+      currentStep: prog.currentStep,
+      status: tracker ? tracker.status : "Pending",
+      decision: decCache ? decCache.getDecision() : null,
+      progress: prog.progressPercentage,
+    };
   }
 
   /**
-   * Get the last cached plan.
+   * Get the last cached plan summary.
    *
    * @returns {object | null}
    */
   getPlan() {
     return this._lastPlan;
+  }
+
+  /**
+   * Get the raw active plan reference for execution.
+   *
+   * @returns {object | null}
+   */
+  getRawPlan() {
+    return this._rawPlan;
   }
 
   /**
@@ -36,6 +62,7 @@ export class PlanCache {
    */
   clear() {
     this._lastPlan = null;
+    this._rawPlan = null;
   }
 }
 

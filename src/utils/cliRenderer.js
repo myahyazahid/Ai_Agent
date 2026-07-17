@@ -115,13 +115,21 @@ export function renderStatusEvent(event) {
     }
     case "planner:planning":
       return "📝 Building execution plan...";
+    case "planner:executing":
+      return "▶ Executing...";
+    case "planner:waiting":
+      return "⏸ Waiting for User";
+    case "planner:failed":
+      return "❌ Failed";
+    case "planner:cancelled":
+      return "⚠️ Cancelled";
     case "planner:step": {
       const step = event?.step;
       const desc = step ? `: ${step.description}` : "";
       return `📦 Step ${iterationTag}${desc}`;
     }
     case "planner:completed":
-      return "✅ Plan completed.";
+      return "✅ Completed";
 
     // Editing engine phases
     case "editing:reading":

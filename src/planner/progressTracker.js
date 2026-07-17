@@ -18,6 +18,8 @@ export class ProgressTracker {
     this.plan = null;
     /** @type {Record<string, StepResult>} */
     this.results = {};
+    /** @type {"Pending" | "Executing" | "WaitingForUser" | "Completed" | "Failed"} */
+    this.status = "Pending";
   }
 
   /**
@@ -29,6 +31,7 @@ export class ProgressTracker {
   init(plan) {
     this.plan = plan;
     this.results = {};
+    this.status = "Pending";
     if (this.plan && Array.isArray(this.plan.steps)) {
       for (const step of this.plan.steps) {
         step.status = "pending";
@@ -46,6 +49,7 @@ export class ProgressTracker {
     const step = this.findStep(stepId);
     if (step) {
       step.status = "running";
+      this.status = "Executing";
     }
   }
 
@@ -76,6 +80,7 @@ export class ProgressTracker {
     if (step) {
       step.status = "failed";
       this.results[stepId] = result;
+      this.status = "Failed";
     }
   }
 
