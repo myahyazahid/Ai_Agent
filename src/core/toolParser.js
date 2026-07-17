@@ -1,7 +1,9 @@
 /**
  * Parse model output into either a tool call or a plain response.
- * Parsing is intentionally tolerant so malformed output degrades gracefully
- * into a normal assistant response instead of breaking agent execution.
+ *
+ * The parser enforces the single-action protocol: if the model returns
+ * multiple JSON objects in one response (a violation), only the first
+ * valid object is extracted and used. This prevents silent tool-call loss.
  */
 export class ToolParser {
   /**
@@ -26,8 +28,17 @@ export class ToolParser {
       };
     }
 
+    const jsonString = this.extractFirstJsonObject(candidate);
+
+    if (!jsonString) {
+      return {
+        type: "response",
+        content: originalText,
+      };
+    }
+
     try {
-      const parsed = JSON.parse(candidate);
+      const parsed = JSON.parse(jsonString);
       return this.normalizeParsedValue(parsed, originalText);
     } catch {
       return {
@@ -35,6 +46,62 @@ export class ToolParser {
         content: originalText,
       };
     }
+  }
+
+  /**
+   * Extract the first top-level JSON object from a string that may contain
+   * multiple concatenated objects, surrounding text, or markdown.
+   *
+   * Uses brace-depth tracking to find the boundaries of the first `{...}`
+   * block, correctly handling nested braces and quoted strings.
+   *
+   * @param {string} text
+   * @returns {string | null}
+   */
+  extractFirstJsonObject(text) {
+    let start = -1;
+    let depth = 0;
+    let inString = false;
+    let escapeNext = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+
+      if (char === "\\") {
+        if (inString) {
+          escapeNext = true;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+
+      if (inString) {
+        continue;
+      }
+
+      if (char === "{") {
+        if (depth === 0) {
+          start = i;
+        }
+        depth++;
+      } else if (char === "}") {
+        depth--;
+        if (depth === 0 && start !== -1) {
+          return text.slice(start, i + 1);
+        }
+      }
+    }
+
+    return null;
   }
 
   /**

@@ -47,6 +47,14 @@ export class CodingAgent {
    * Run a multi-step agent loop until the model returns a final response or the
    * iteration budget is exhausted.
    *
+   * Flow:
+   *   1. Build the initial message array (system prompt + history + user input).
+   *   2. Send to the LLM.
+   *   3. Parse the response.
+   *   4. If tool_call → execute tool → append result as a user message → loop.
+   *   5. If response → persist memory → return.
+   *   6. If max iterations reached → return agent_error.
+   *
    * @param {string} userInput
    * @returns {Promise<
    *   | {
@@ -125,12 +133,18 @@ export class CodingAgent {
         };
       }
 
+      // Append the raw assistant tool-call message so the model sees its own output.
       const assistantToolCallMessage = this.createAssistantMessage(response.content);
       messages.push(assistantToolCallMessage);
       newMemoryMessages.push(assistantToolCallMessage);
 
+      // Execute the tool and capture the result.
       const toolResult = await this.executeToolCall(parsed, iteration);
-      const toolMessage = this.createToolMessage(toolResult);
+
+      // Append the tool result as a **user** message so Ollama processes it.
+      // Ollama only supports system/user/assistant roles — using role: "tool"
+      // causes the message to be silently dropped.
+      const toolMessage = this.createToolResultMessage(toolResult);
 
       toolResults.push(toolResult);
       messages.push(toolMessage);
@@ -139,6 +153,7 @@ export class CodingAgent {
       this.emitStatus("Continuing", {
         phase: "continuing",
         iteration,
+        maxIterations: this.maxIterations,
         tool: parsed.tool,
       });
     }
@@ -183,6 +198,7 @@ export class CodingAgent {
     this.emitStatus("Deciding next action", {
       phase: "llm",
       iteration,
+      maxIterations: this.maxIterations,
     });
 
     return this.llm.chat(messages);
@@ -190,6 +206,10 @@ export class CodingAgent {
 
   /**
    * Resolve and execute a parsed tool call, then return a normalized tool result.
+   *
+   * On failure (tool not found or execution error), the error is captured into
+   * a tool result and returned — it is NOT thrown. This allows the model to
+   * observe the failure and decide whether to retry or try a different approach.
    *
    * @param {{type: "tool_call", tool: string, args: Record<string, unknown>}} parsed
    * @param {number} iteration
@@ -213,7 +233,7 @@ export class CodingAgent {
       const result = this.createToolResult(
         parsed.tool,
         false,
-        `Tool '${parsed.tool}' not found.`
+        `Tool '${parsed.tool}' not found. Available tools: ${this.toolRegistry.list().map(t => t.name).join(", ")}.`
       );
 
       this.emitStatus("Tool Failed", {
@@ -342,7 +362,12 @@ export class CodingAgent {
   }
 
   /**
-   * Convert a tool result into a message that the model can inspect in the next loop.
+   * Convert a tool result into a message that the model can inspect in the next
+   * iteration of the execution loop.
+   *
+   * Uses role: "user" with a [Tool Result] prefix because Ollama only supports
+   * system/user/assistant roles. Using role: "tool" would cause the message to
+   * be silently dropped, breaking the feedback loop entirely.
    *
    * @param {{
    *   type: "tool_result",
@@ -353,10 +378,10 @@ export class CodingAgent {
    * }} toolResult
    * @returns {{role: string, content: string}}
    */
-  createToolMessage(toolResult) {
+  createToolResultMessage(toolResult) {
     return {
-      role: "tool",
-      content: JSON.stringify(toolResult, null, 2),
+      role: "user",
+      content: `[Tool Result]\n${JSON.stringify(toolResult, null, 2)}`,
     };
   }
 

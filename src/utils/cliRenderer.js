@@ -11,19 +11,21 @@ export function renderHeader() {
 }
 
 /**
- * Render an execution status event.
+ * Render an execution status event with iteration context.
  *
- * @param {{message?: string}} event
+ * @param {{message?: string, phase?: string, tool?: string, args?: Record<string, unknown>, result?: Record<string, unknown>, iteration?: number, maxIterations?: number}} event
  * @returns {string}
  */
 export function renderStatusEvent(event) {
+  const iterationTag = formatIterationTag(event?.iteration, event?.maxIterations);
+
   switch (event?.phase) {
     case "planning":
       return "🧠 Planning...";
     case "llm":
-      return "🤖 Deciding next action...";
+      return `🤖 Deciding next action...${iterationTag}`;
     case "tool_selected":
-      return `🔧 Selected Tool:\n${event.tool ?? "unknown_tool"}`;
+      return `🔧 Tool: ${event.tool ?? "unknown_tool"}`;
     case "tool_executing":
       return renderToolExecutionEvent(event);
     case "tool_finished":
@@ -31,7 +33,7 @@ export function renderStatusEvent(event) {
     case "tool_failed":
       return `❌ ${event?.result?.message ?? "Tool failed."}`;
     case "continuing":
-      return "🤖 Continuing...";
+      return `🤖 Continuing...${iterationTag}`;
     case "max_iterations":
       return "⚠️ Agent exceeded maximum execution steps.";
     default: {
@@ -45,6 +47,25 @@ export function renderStatusEvent(event) {
       return `🧠 ${message}...`;
     }
   }
+}
+
+/**
+ * Format an iteration progress tag like " [2/15]".
+ *
+ * @param {number | undefined} iteration
+ * @param {number | undefined} maxIterations
+ * @returns {string}
+ */
+function formatIterationTag(iteration, maxIterations) {
+  if (typeof iteration !== "number") {
+    return "";
+  }
+
+  if (typeof maxIterations === "number") {
+    return ` [${iteration}/${maxIterations}]`;
+  }
+
+  return ` [${iteration}]`;
 }
 
 /**
@@ -154,17 +175,17 @@ function renderToolExecutionEvent(event) {
 
   switch (tool) {
     case "write_file":
-      return `📄 Creating:\n${String(args.path ?? "(unknown path)")}`;
+      return `📄 Creating: ${String(args.path ?? "(unknown path)")}`;
     case "append_file":
-      return `📝 Updating:\n${String(args.path ?? "(unknown path)")}`;
+      return `📝 Updating: ${String(args.path ?? "(unknown path)")}`;
     case "read_file":
-      return `📖 Reading:\n${String(args.path ?? "(unknown path)")}`;
+      return `📖 Reading: ${String(args.path ?? "(unknown path)")}`;
     case "delete_file":
-      return `🗑 Deleting:\n${String(args.path ?? "(unknown path)")}`;
+      return `🗑 Deleting: ${String(args.path ?? "(unknown path)")}`;
     case "terminal_execute":
-      return `💻 Executing:\n${String(args.command ?? "(unknown command)")}`;
+      return `💻 Executing: ${String(args.command ?? "(unknown command)")}`;
     default:
-      return `🔧 Executing:\n${tool}`;
+      return `🔧 Executing: ${tool}`;
   }
 }
 
@@ -184,15 +205,15 @@ function renderToolResultDetails(tool, data) {
 
   switch (tool) {
     case "write_file":
-      return `\n\nCreated:\n${String(details.path ?? "(unknown path)")}`;
+      return `\n\nCreated: ${String(details.path ?? "(unknown path)")}`;
     case "append_file":
-      return `\n\nModified:\n${String(details.path ?? "(unknown path)")}`;
+      return `\n\nModified: ${String(details.path ?? "(unknown path)")}`;
     case "read_file":
-      return `\n\nRead:\n${String(details.path ?? "(unknown path)")}`;
+      return `\n\nRead: ${String(details.path ?? "(unknown path)")}`;
     case "delete_file":
-      return `\n\nDeleted:\n${String(details.path ?? "(unknown path)")}`;
+      return `\n\nDeleted: ${String(details.path ?? "(unknown path)")}`;
     case "terminal_execute":
-      return `\n\nExecuted:\n${String(details.command ?? "(unknown command)")}`;
+      return `\n\nExecuted: ${String(details.command ?? "(unknown command)")}`;
     default:
       return `\n\nData\n\n${JSON.stringify(details, null, 2)}`;
   }
