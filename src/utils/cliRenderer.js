@@ -74,6 +74,20 @@ export function renderStatusEvent(event) {
     case "context:cache-hit":
       return "💾 Using cached context";
 
+    // Editing engine phases
+    case "editing:reading":
+      return "📖 Reading file...";
+    case "editing:planning":
+      return "🧠 Planning edits...";
+    case "editing:patch":
+      return "🩹 Generating patch...";
+    case "editing:validating":
+      return "🔍 Validating...";
+    case "editing:writing":
+      return "💾 Writing...";
+    case "editing:done":
+      return event?.preview ? "👀 Preview compiled (skipping write)" : "✅ Edit complete.";
+
     default: {
       const message =
         typeof event?.message === "string" ? event.message.trim() : "";

@@ -23,7 +23,7 @@ export class ToolParser {
 
     if (!candidate) {
       return {
-        type: "response",
+        type: "invalid_format",
         content: originalText,
       };
     }
@@ -32,7 +32,7 @@ export class ToolParser {
 
     if (!jsonString) {
       return {
-        type: "response",
+        type: "invalid_format",
         content: originalText,
       };
     }
@@ -42,7 +42,7 @@ export class ToolParser {
       return this.normalizeParsedValue(parsed, originalText);
     } catch {
       return {
-        type: "response",
+        type: "invalid_format",
         content: originalText,
       };
     }
@@ -137,7 +137,7 @@ export class ToolParser {
   normalizeParsedValue(parsed, fallback) {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {
-        type: "response",
+        type: "invalid_format",
         content: fallback,
       };
     }
@@ -162,7 +162,7 @@ export class ToolParser {
     }
 
     return {
-      type: "response",
+      type: "invalid_format",
       content: fallback,
     };
   }

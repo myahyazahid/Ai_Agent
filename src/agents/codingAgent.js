@@ -8,6 +8,7 @@ import toolRegistry from "../registry/toolRegistry.js";
 import workspaceContext from "../core/workspaceContext.js";
 import workspaceService from "../workspace/workspaceService.js";
 import contextEngine from "../context/contextEngine.js";
+import editingEngine from "../editing/editingEngine.js";
 
 const DEFAULT_MAX_ITERATIONS = 15;
 
@@ -22,6 +23,7 @@ export class CodingAgent {
    * @param {typeof workspaceContext} [dependencies.workspaceContext]
    * @param {typeof workspaceService} [dependencies.workspaceService]
    * @param {typeof contextEngine} [dependencies.contextEngine]
+   * @param {typeof editingEngine} [dependencies.editingEngine]
    * @param {import("../core/eventBus.js").AgentEventBus} [dependencies.eventBus]
    * @param {number} [dependencies.maxIterations]
    */
@@ -34,6 +36,7 @@ export class CodingAgent {
     workspaceContext: workspaceContextBuilder = workspaceContext,
     workspaceService: workspaceKnowledgeService = workspaceService,
     contextEngine: contextEngineService = contextEngine,
+    editingEngine: codeEditingEngine = editingEngine,
     eventBus: executionEventBus = eventBus,
     maxIterations = DEFAULT_MAX_ITERATIONS,
   } = {}) {
@@ -45,6 +48,7 @@ export class CodingAgent {
     this.workspaceContext = workspaceContextBuilder;
     this.workspaceService = workspaceKnowledgeService;
     this.contextEngine = contextEngineService;
+    this.editingEngine = codeEditingEngine;
     this.eventBus = executionEventBus;
     this.eventSource = "codingAgent";
     this.maxIterations = maxIterations;
@@ -154,13 +158,35 @@ export class CodingAgent {
         };
       }
 
+      if (parsed.type === "invalid_format") {
+        const assistantMsg = this.createAssistantMessage(response.content);
+        const correctionMsg = {
+          role: "user",
+          content: "Format Error: Your output was not a valid JSON object. You must return ONLY a single JSON object. If you want to make a code modification, return a tool_call to 'write_file'. If you are done, return a response JSON. Do NOT include conversational text or markdown wrapping outside JSON."
+        };
+
+        messages.push(assistantMsg);
+        newMemoryMessages.push(assistantMsg);
+
+        messages.push(correctionMsg);
+        newMemoryMessages.push(correctionMsg);
+
+        this.emitStatus("Formatting correction requested", {
+          phase: "continuing",
+          iteration,
+          maxIterations: this.maxIterations,
+        });
+
+        continue;
+      }
+
       // Append the raw assistant tool-call message so the model sees its own output.
       const assistantToolCallMessage = this.createAssistantMessage(response.content);
       messages.push(assistantToolCallMessage);
       newMemoryMessages.push(assistantToolCallMessage);
 
       // Execute the tool and capture the result.
-      const toolResult = await this.executeToolCall(parsed, iteration);
+      const toolResult = await this.executeToolCall(parsed, iteration, workspaceData);
 
       // Append the tool result as a **user** message so Ollama processes it.
       // Ollama only supports system/user/assistant roles — using role: "tool"
@@ -242,7 +268,7 @@ export class CodingAgent {
    *   data: Record<string, unknown> | null
    * }}
    */
-  async executeToolCall(parsed, iteration) {
+  async executeToolCall(parsed, iteration, workspaceData = null) {
     this.emitStatus("Tool Selected", {
       phase: "tool_selected",
       tool: parsed.tool,
@@ -273,23 +299,56 @@ export class CodingAgent {
     if (parsed.tool === "write_file") {
       const filePath = parsed.args?.path;
       if (filePath && typeof filePath === "string") {
-        const isSafe = await this.verifyFileWriteSafety(filePath);
-        if (!isSafe) {
-          const result = this.createToolResult(
-            parsed.tool,
-            false,
-            `Safety violation: The file '${filePath}' already exists. You cannot overwrite or edit it without reading its contents first. Please call read_file on this file path first, analyze the implementation, and plan your changes before modifying it.`
-          );
+        const resolvedPath = tool.resolvePath(filePath);
+        const fileExists = await access(resolvedPath).then(() => true).catch(() => false);
 
-          this.emitStatus("Tool Failed", {
-            phase: "tool_failed",
-            tool: parsed.tool,
-            args: parsed.args,
-            iteration,
-            result,
-          });
+        if (fileExists) {
+          try {
+            // Get the last user request text
+            const userMessages = this.memory.get().filter(m => m.role === "user");
+            const lastUserRequest = userMessages[userMessages.length - 1]?.content || "Modify file";
 
-          return result;
+            const editResult = await this.editingEngine.applyEdit({
+              request: {
+                text: lastUserRequest,
+                proposedContent: parsed.args.content,
+              },
+              workspace: workspaceData,
+              targetFile: resolvedPath,
+            });
+
+            const result = this.createToolResult(
+              "write_file",
+              true,
+              `File '${filePath}' successfully edited incrementally. Diff:\n${editResult.diff}`
+            );
+
+            this.emitStatus("Tool Finished", {
+              phase: "tool_finished",
+              tool: parsed.tool,
+              args: parsed.args,
+              iteration,
+              result,
+            });
+
+            return result;
+          } catch (error) {
+            const result = this.createToolResult(
+              "write_file",
+              false,
+              `Editing safety check/modification failed: ${error instanceof Error ? error.message : "Code transformation failed."}`
+            );
+
+            this.emitStatus("Tool Failed", {
+              phase: "tool_failed",
+              tool: parsed.tool,
+              args: parsed.args,
+              iteration,
+              result,
+            });
+
+            return result;
+          }
         }
       }
     }
@@ -426,7 +485,7 @@ export class CodingAgent {
   createToolResultMessage(toolResult) {
     return {
       role: "user",
-      content: `[Tool Result]\n${JSON.stringify(toolResult, null, 2)}`,
+      content: `[Tool Result]\n${JSON.stringify(toolResult, null, 2)}\n\nREMINDER: You must output ONLY a single JSON object. If you want to make a code modification, return a tool_call to 'write_file'. Do NOT include any natural language explanation, commentary, or markdown wrapping.`,
     };
   }
 
@@ -503,61 +562,6 @@ export class CodingAgent {
     }
 
     return Array.from(recent);
-  }
-
-  /**
-   * Programmatic safety check to prevent overwriting existing files without
-   * reading them first.
-   *
-   * @param {string} filePath
-   * @returns {Promise<boolean>} True if safe (file does not exist or has been read), false otherwise.
-   */
-  async verifyFileWriteSafety(filePath) {
-    if (typeof filePath !== "string" || !filePath.trim()) {
-      return true;
-    }
-
-    const fileTool = this.toolRegistry.get("write_file");
-    if (!fileTool) {
-      return true;
-    }
-
-    try {
-      const resolvedPath = fileTool.resolvePath(filePath);
-      const fileExists = await access(resolvedPath).then(() => true).catch(() => false);
-      if (!fileExists) {
-        return true; // File doesn't exist, writing is safe (creation of new file)
-      }
-
-      // File exists! Verify it was read first in this conversation session.
-      const history = this.memory.get();
-      const cleanPath = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
-
-      const wasRead = history.some((msg) => {
-        const contentLower = (msg.content || "").toLowerCase();
-        
-        // Check if there is an assistant tool call to read_file on this file path
-        if (msg.role === "assistant" && contentLower.includes("read_file")) {
-          try {
-            const parsed = JSON.parse(msg.content);
-            if (parsed.type === "tool_call" && parsed.tool === "read_file") {
-              const p = parsed.args?.path;
-              if (typeof p === "string") {
-                const normP = p.replace(/\\/g, "/").replace(/^\.\//, "");
-                return normP === cleanPath;
-              }
-            }
-          } catch {
-            // ignore
-          }
-        }
-        return false;
-      });
-
-      return wasRead;
-    } catch {
-      return true; // Fallback to safe if resolution fails
-    }
   }
 }
 

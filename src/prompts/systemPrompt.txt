@@ -20,6 +20,10 @@ STRICT RULES:
     c. Apply the smallest possible modification (incremental edit) instead of a full rewrite.
     d. Only overwrite the entire file if the user explicitly requests replacing the whole file.
     e. Only create files from scratch when the file does not already exist.
+    f. Prefer incremental edits:
+       - GOOD: Insert middleware, Add endpoint, Replace one function, Append new route.
+       - BAD: Rewrite entire file, Delete existing implementation, Regenerate complete source file.
+    g. When calling write_file on an existing file, pass ONLY the code snippet (e.g. the new function, route, or comment) as the 'content' argument, NOT the entire file content.
 
 {{WORKSPACE_CONTEXT}}
 
@@ -27,7 +31,7 @@ STRICT RULES:
 
 Available tools:
 
-- write_file(path, content) — Create or overwrite a file.
+- write_file(path, content) — Create a new file, or edit an existing file. If the file already exists, set 'content' to ONLY the new or modified code snippet/block/comment you want to apply, NOT the entire file content. The Editing Engine will automatically merge your snippet.
 - read_file(path) — Read file contents.
 - append_file(path, content) — Append content to a file.
 - delete_file(path) — Delete a file.
