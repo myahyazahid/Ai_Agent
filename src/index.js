@@ -4,6 +4,9 @@ import readline from "node:readline";
 import codingAgent from "./agents/codingAgent.js";
 import eventBus, { AGENT_EVENTS } from "./core/eventBus.js";
 import editCache from "./editing/editCache.js";
+import planCache from "./planner/planCache.js";
+import progressTracker from "./planner/progressTracker.js";
+import planner from "./planner/planner.js";
 import {
   renderChat,
   renderDoneEvent,
@@ -128,6 +131,72 @@ function chat() {
       return;
     }
 
+    if (command === "plan" || command === "/plan") {
+      const activePlan = planCache.getPlan();
+      if (!activePlan) {
+        display("No active execution plan in cache.");
+      } else {
+        display("\n📝 Active Execution Plan:");
+        display(`Goal: "${activePlan.goal.goal}"`);
+        display(`Category: ${activePlan.goal.type}`);
+        display(`Success Criteria: ${activePlan.goal.successCriteria}`);
+        display("\nSteps:");
+        activePlan.steps.forEach((step, idx) => {
+          const statusIcon = step.status === "completed" ? "✅" : step.status === "skipped" ? "⏭️" : step.status === "failed" ? "❌" : step.status === "running" ? "⏳" : "💤";
+          display(`  ${idx + 1}. [${statusIcon} ${step.status}] ${step.id}: ${step.description} (Target: ${step.target}, Strategy: ${step.failureStrategy})`);
+          if (step.dependsOn.length > 0) {
+            display(`     └─ Depends on: ${step.dependsOn.join(", ")}`);
+          }
+        });
+      }
+      chat();
+      return;
+    }
+
+    if (command === "status" || command === "/status") {
+      const activePlan = planCache.getPlan();
+      if (!activePlan) {
+        display("No active plan execution details.");
+      } else {
+        const prog = progressTracker.getProgress();
+        display("\n📊 Plan Progress Summary:");
+        display(`Progress: ${prog.progressPercentage}%`);
+        display(`Completed Steps: ${prog.completedSteps.length}/${activePlan.steps.length}`);
+        display(`Remaining Steps: ${prog.remainingSteps.length}`);
+        display(`Failed Steps: ${prog.failedSteps.length}`);
+        if (prog.currentStep) {
+          display(`Current Step: [${prog.currentStep.status}] ${prog.currentStep.description}`);
+        }
+        display("\nStep Execution Records:");
+        Object.entries(progressTracker.results).forEach(([stepId, result]) => {
+          display(`  - ${stepId}: ${result.status.toUpperCase()} (${result.duration}ms) via ${result.toolUsed}`);
+          if (result.filesChanged.length > 0) {
+            display(`    Files: ${result.filesChanged.join(", ")}`);
+          }
+        });
+      }
+      chat();
+      return;
+    }
+
+    if (command === "resume" || command === "/resume") {
+      const activePlan = planCache.getPlan();
+      if (!activePlan) {
+        display("No active plan to resume.");
+      } else {
+        display("Resuming failed steps from the current plan...");
+        planner.resume();
+        try {
+          const result = await codingAgent.chat(activePlan.goal.goal);
+          display(renderChat(result));
+        } catch (error) {
+          display(renderError(error), "error");
+        }
+      }
+      chat();
+      return;
+    }
+
     try {
       const result = await codingAgent.chat(input);
       display(renderChat(result));
@@ -141,3 +210,4 @@ function chat() {
 
 chat();
 // Test Editing Engine
+// yahya ganteng

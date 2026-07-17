@@ -9,6 +9,8 @@ import workspaceContext from "../core/workspaceContext.js";
 import workspaceService from "../workspace/workspaceService.js";
 import contextEngine from "../context/contextEngine.js";
 import editingEngine from "../editing/editingEngine.js";
+import planner from "../planner/planner.js";
+
 
 const DEFAULT_MAX_ITERATIONS = 15;
 
@@ -24,6 +26,7 @@ export class CodingAgent {
    * @param {typeof workspaceService} [dependencies.workspaceService]
    * @param {typeof contextEngine} [dependencies.contextEngine]
    * @param {typeof editingEngine} [dependencies.editingEngine]
+   * @param {typeof planner} [dependencies.planner]
    * @param {import("../core/eventBus.js").AgentEventBus} [dependencies.eventBus]
    * @param {number} [dependencies.maxIterations]
    */
@@ -37,6 +40,7 @@ export class CodingAgent {
     workspaceService: workspaceKnowledgeService = workspaceService,
     contextEngine: contextEngineService = contextEngine,
     editingEngine: codeEditingEngine = editingEngine,
+    planner: taskPlanner = planner,
     eventBus: executionEventBus = eventBus,
     maxIterations = DEFAULT_MAX_ITERATIONS,
   } = {}) {
@@ -49,6 +53,7 @@ export class CodingAgent {
     this.workspaceService = workspaceKnowledgeService;
     this.contextEngine = contextEngineService;
     this.editingEngine = codeEditingEngine;
+    this.planner = taskPlanner;
     this.eventBus = executionEventBus;
     this.eventSource = "codingAgent";
     this.maxIterations = maxIterations;
@@ -101,10 +106,11 @@ export class CodingAgent {
    */
   async chat(userInput) {
     this.emitStatus("Understanding request");
-    this.emitStatus("Planning", { phase: "planning" });
 
     // Load project-level knowledge (cached after first scan).
     const workspaceData = await this.workspaceService.load();
+
+    const analysis = this.planner.analyzeTask(userInput, workspaceData);
 
     const history = this.memory.get();
     const context = this.workspaceContext.build({
@@ -122,6 +128,156 @@ export class CodingAgent {
       recentFiles,
     });
 
+    if (analysis.planningRequired) {
+      const plan = this.planner.createPlan(userInput, analysis);
+      const toolResults = [];
+      const newMemoryMessages = [{ role: "user", content: userInput }];
+
+      let step = this.planner.nextStep();
+      let iteration = 1;
+
+      while (step && iteration <= this.maxIterations) {
+        const stepContextText = `Plan Goal: "${plan.goal.goal}" (Type: "${plan.goal.type}")
+Success Criteria: "${plan.goal.successCriteria}"
+Current Step (${iteration}/${plan.steps.length}): "${step.description}" (Target: "${step.target}", Type: "${step.type}")
+Please execute this step by calling the appropriate tool. Output ONLY a single JSON tool_call. Do NOT include markdown wrapping or explanation text outside JSON.`;
+
+        const stepMessages = this.promptBuilder.build(
+          stepContextText,
+          history,
+          context,
+          contextEngineResult.context
+        );
+
+        const startTime = Date.now();
+        const response = await this.requestModel(stepMessages, iteration);
+        const parsed = this.toolParser.parse(response.content);
+
+        if (parsed.type === "invalid_format") {
+          const assistantMsg = this.createAssistantMessage(response.content);
+          const correctionMsg = {
+            role: "user",
+            content: "Format Error: Your output was not a valid JSON object. You must return ONLY a single JSON object. If you want to make a code modification, return a tool_call to 'write_file'. If you are done, return a response JSON. Do NOT include conversational text or markdown wrapping outside JSON."
+          };
+
+          history.push(assistantMsg);
+          newMemoryMessages.push(assistantMsg);
+
+          history.push(correctionMsg);
+          newMemoryMessages.push(correctionMsg);
+
+          this.emitStatus("Formatting correction requested", {
+            phase: "continuing",
+            iteration,
+            maxIterations: this.maxIterations,
+          });
+
+          iteration++;
+          continue;
+        }
+
+        if (parsed.type === "response") {
+          const stepResult = {
+            status: "success",
+            duration: Date.now() - startTime,
+            filesChanged: [],
+            toolUsed: "response",
+            output: parsed.content,
+          };
+
+          this.planner.recordStepResult(step.id, stepResult);
+          
+          history.push(this.createAssistantMessage(response.content));
+          newMemoryMessages.push(this.createAssistantMessage(response.content));
+
+          step = this.planner.nextStep();
+          iteration++;
+          continue;
+        }
+
+        // Append LLM's own tool call message
+        const assistantToolCallMessage = this.createAssistantMessage(response.content);
+        history.push(assistantToolCallMessage);
+        newMemoryMessages.push(assistantToolCallMessage);
+
+        // Execute the tool call
+        const toolResult = await this.executeToolCall(parsed, iteration, workspaceData);
+        toolResults.push(toolResult);
+
+        // Append the tool result back into active context
+        const toolMessage = this.createToolResultMessage(toolResult);
+        history.push(toolMessage);
+        newMemoryMessages.push(toolMessage);
+
+        const stepResult = {
+          status: toolResult.success ? "success" : "failed",
+          duration: Date.now() - startTime,
+          filesChanged: parsed.tool === "write_file" ? [parsed.args?.path] : [],
+          toolUsed: parsed.tool,
+          output: toolResult.message,
+        };
+
+        this.planner.recordStepResult(step.id, stepResult);
+
+        if (!toolResult.success) {
+          const strategy = step.failureStrategy;
+          if (strategy === "abort") {
+            const errorResult = {
+              type: "agent_error",
+              success: false,
+              message: `Plan execution aborted: Step '${step.id}' failed. Error: ${toolResult.message}`,
+              iterations: iteration,
+              toolResults,
+            };
+
+            newMemoryMessages.push(this.createAssistantMessage(errorResult.message));
+            this.persistMemoryMessages(newMemoryMessages);
+            this.emitDone({
+              done: true,
+              success: false,
+              iterations: iteration,
+              toolCount: toolResults.length,
+            });
+
+            return errorResult;
+          } else if (strategy === "skip") {
+            this.planner.tracker.markStepSkipped(step.id);
+          } else if (strategy === "retry") {
+            iteration++;
+            continue; // Re-run the loop with the same active step
+          }
+        }
+
+        step = this.planner.nextStep();
+        iteration++;
+      }
+
+      const finalContent = `Plan completed successfully. Goal achieved: "${plan.goal.goal}"`;
+      const finalMsg = { role: "assistant", content: finalContent };
+      newMemoryMessages.push(finalMsg);
+      this.persistMemoryMessages(newMemoryMessages);
+
+      this.emitDone({
+        role: "assistant",
+        done: true,
+        iterations: iteration - 1,
+        toolCount: toolResults.length,
+        success: true,
+      });
+
+      return {
+        type: "response",
+        role: "assistant",
+        content: finalContent,
+        thinking: "",
+        done: true,
+        raw: {},
+        iterations: iteration - 1,
+        toolResults,
+      };
+    }
+
+    // Default Fallback: Flat agent loop for low-complexity / non-planning tasks
     const messages = this.promptBuilder.build(userInput, history, context, contextEngineResult.context);
     const newMemoryMessages = [{ role: "user", content: userInput }];
     const toolResults = [];
@@ -189,8 +345,6 @@ export class CodingAgent {
       const toolResult = await this.executeToolCall(parsed, iteration, workspaceData);
 
       // Append the tool result as a **user** message so Ollama processes it.
-      // Ollama only supports system/user/assistant roles — using role: "tool"
-      // causes the message to be silently dropped.
       const toolMessage = this.createToolResultMessage(toolResult);
 
       toolResults.push(toolResult);

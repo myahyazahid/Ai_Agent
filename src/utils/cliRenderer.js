@@ -74,6 +74,19 @@ export function renderStatusEvent(event) {
     case "context:cache-hit":
       return "💾 Using cached context";
 
+    // Planner phases
+    case "planner:analyzing":
+      return "🧠 Analyzing task...";
+    case "planner:planning":
+      return "📝 Building execution plan...";
+    case "planner:step": {
+      const step = event?.step;
+      const desc = step ? `: ${step.description}` : "";
+      return `📦 Step ${iterationTag}${desc}`;
+    }
+    case "planner:completed":
+      return "✅ Plan completed.";
+
     // Editing engine phases
     case "editing:reading":
       return "📖 Reading file...";
